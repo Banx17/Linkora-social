@@ -64,6 +64,14 @@ pub enum StorageKey {
     PostReportersIdx(u64, u32),    // persistent: (post_id, seq) -> Address (Count is ReportCount)
     PostTipCooldownsCount(u64),    // persistent: post_id -> u32
     PostTipCooldownsIdx(u64, u32), // persistent: (post_id, seq) -> Address
+
+    // ── Content-hash anchoring (off-chain media integrity) ────────────────
+    PostContentHash(u64), // persistent: post_id -> BytesN<32> off-chain content hash
+
+    // ── Moderation appeals ────────────────────────────────────────────────
+    RemovedPost(u64),      // persistent: post_id -> Post snapshot removed by moderation
+    ModerationRecord(u64), // persistent: post_id -> ModerationRecord (appeal deadline)
+    Appeal(u64),           // persistent: post_id -> Appeal
 }
 
 #[contracterror]
@@ -117,6 +125,13 @@ const MAX_PAGINATION_LIMIT: u32 = 50;
 const MAX_BATCH_POST_SIZE: u32 = 10;
 /// Maximum raw post IDs scanned by `get_recent_posts` in one call.
 const MAX_RECENT_SCAN: u32 = 500;
+
+/// Maximum number of graph edges inspected by `get_suggested_follows` in one
+/// call, so discovery stays bounded regardless of how dense the graph is.
+const MAX_SUGGEST_SCAN: u32 = 200;
+
+/// Ledgers an author has to appeal a moderation decision (~2 days at 5s/ledger).
+const APPEAL_WINDOW_LEDGERS: u32 = 34_560;
 
 // ── Data Types ────────────────────────────────────────────────────────────────
 
@@ -252,6 +267,39 @@ pub struct Report {
     pub reason_hash: BytesN<32>,
     pub created_ledger: u32,
     pub status: ReportStatus,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AppealStatus {
+    Pending,
+    Approved,
+    Rejected,
+}
+
+/// Snapshot of a moderation decision, kept so the author can appeal it within
+/// the appeal window even though the post itself has been removed.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ModerationRecord {
+    pub post_id: u64,
+    pub reporter: Address,
+    pub removed_ledger: u32,
+    pub appeal_deadline: u32,
+}
+
+/// An author's appeal against a moderation decision. Resolved once the `mods`
+/// pool threshold of distinct reviewers agree.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct Appeal {
+    pub post_id: u64,
+    pub appellant: Address,
+    pub reason_hash: BytesN<32>,
+    pub filed_ledger: u32,
+    pub status: AppealStatus,
+    pub approvers: Vec<Address>,
+    pub rejecters: Vec<Address>,
 }
 
 // ── Per-module Pause ──────────────────────────────────────────────────────────
@@ -730,6 +778,40 @@ pub struct ReportDismissedEvent {
     pub post_id: u64,
     #[topic]
     pub reporter: Address,
+}
+
+#[contractevent]
+#[derive(Clone)]
+pub struct PostContentHashSetEvent {
+    #[topic]
+    pub version: u32,
+    #[topic]
+    pub post_id: u64,
+    #[topic]
+    pub author: Address,
+    pub content_hash: BytesN<32>,
+}
+
+#[contractevent]
+#[derive(Clone)]
+pub struct AppealFiledEvent {
+    #[topic]
+    pub version: u32,
+    #[topic]
+    pub post_id: u64,
+    #[topic]
+    pub appellant: Address,
+}
+
+#[contractevent]
+#[derive(Clone)]
+pub struct AppealResolvedEvent {
+    #[topic]
+    pub version: u32,
+    #[topic]
+    pub post_id: u64,
+    #[topic]
+    pub approved: bool,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -1443,6 +1525,81 @@ impl LinkoraContract {
         Self::paginate_index(&env, &user, offset, limit, false)
     }
 
+    /// Read-only "who to follow" discovery: distinct accounts followed by the
+    /// user's followees (2-hop), excluding the user and anyone the user already
+    /// follows. Paginated; at most `MAX_SUGGEST_SCAN` graph edges are inspected
+    /// per call, so a page can come back short on dense graphs.
+    pub fn get_suggested_follows(
+        env: Env,
+        user: Address,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<Address> {
+        validate_non_default_address(&env, "user", &user);
+        assert!(
+            limit > 0 && limit <= MAX_PAGE_LIMIT,
+            "limit must be between 1 and 50"
+        );
+
+        // `excluded` doubles as the dedup set: the user, their existing
+        // followees, and every candidate already collected are added to it.
+        let mut excluded: Map<Address, bool> = Map::new(&env);
+        excluded.set(user.clone(), true);
+
+        let following_count: u32 = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::FollowingCount(user.clone()))
+            .unwrap_or(0u32);
+        for seq in 0..following_count {
+            if let Some(followee) = env
+                .storage()
+                .persistent()
+                .get::<_, Address>(&StorageKey::FollowingIdx(user.clone(), seq))
+            {
+                excluded.set(followee, true);
+            }
+        }
+
+        let target = offset.saturating_add(limit);
+        let mut results: Vec<Address> = Vec::new(&env);
+        let mut scans: u32 = 0;
+        let mut hop: u32 = 0;
+        while hop < following_count && results.len() < target && scans < MAX_SUGGEST_SCAN {
+            let mid = env
+                .storage()
+                .persistent()
+                .get::<_, Address>(&StorageKey::FollowingIdx(user.clone(), hop));
+            hop += 1;
+            let mid = match mid {
+                Some(m) => m,
+                None => continue,
+            };
+            let mid_count: u32 = env
+                .storage()
+                .persistent()
+                .get(&StorageKey::FollowingCount(mid.clone()))
+                .unwrap_or(0u32);
+            let mut j: u32 = 0;
+            while j < mid_count && results.len() < target && scans < MAX_SUGGEST_SCAN {
+                if let Some(candidate) = env
+                    .storage()
+                    .persistent()
+                    .get::<_, Address>(&StorageKey::FollowingIdx(mid.clone(), j))
+                {
+                    if !excluded.contains_key(candidate.clone()) {
+                        excluded.set(candidate.clone(), true);
+                        results.push_back(candidate);
+                    }
+                }
+                j += 1;
+                scans += 1;
+            }
+        }
+
+        paginate(&env, &results, offset, limit)
+    }
+
     /// Admin function to migrate users from the legacy Vec-based social graph
     /// to the new adjacency-set layout. Processable in chunks of up to 50
     /// users per call. Idempotent: already-migrated edges are skipped.
@@ -1724,6 +1881,52 @@ impl LinkoraContract {
             Self::bump(&env, &key);
         }
         result
+    }
+
+    /// Anchor an off-chain content hash (e.g. a digest binding an IPFS CID) to
+    /// a post the caller authored. Stored under a parallel key, so the `Post`
+    /// layout is untouched and posts created before this feature read back
+    /// unchanged (with no hash).
+    pub fn set_post_content_hash(
+        env: Env,
+        author: Address,
+        post_id: u64,
+        content_hash: BytesN<32>,
+    ) {
+        Self::bump_instance(&env);
+        author.require_auth();
+        validate_non_default_address(&env, "author", &author);
+        require_with_error!(&env, post_id > 0, "post id must be positive");
+        Self::require_not_paused(&env, PauseModule::Posts);
+
+        let post_key = StorageKey::Post(post_id);
+        let post: Post = env.storage().persistent().get(&post_key).unwrap_or_else(|| {
+            panic!("post does not exist: {}", post_id);
+        });
+        assert!(post.author == author, "only author can set content hash");
+
+        let hash_key = StorageKey::PostContentHash(post_id);
+        env.storage().persistent().set(&hash_key, &content_hash);
+        Self::bump(&env, &hash_key);
+
+        PostContentHashSetEvent { version: EVENT_VERSION, post_id, author, content_hash }
+            .publish(&env);
+    }
+
+    /// Read the off-chain content hash anchored to a post, if one was set.
+    pub fn get_post_content_hash(env: Env, post_id: u64) -> Option<BytesN<32>> {
+        require_with_error!(&env, post_id > 0, "post id must be positive");
+        let key = StorageKey::PostContentHash(post_id);
+        let result: Option<BytesN<32>> = env.storage().persistent().get(&key);
+        if result.is_some() {
+            Self::bump(&env, &key);
+        }
+        result
+    }
+
+    /// True when `expected` matches the content hash anchored to `post_id`.
+    pub fn verify_post_content_hash(env: Env, post_id: u64, expected: BytesN<32>) -> bool {
+        Self::get_post_content_hash(env, post_id) == Some(expected)
     }
 
     pub fn delete_post(env: Env, author: Address, post_id: u64) {
@@ -3218,6 +3421,27 @@ impl LinkoraContract {
                 let post_key = StorageKey::Post(post_id);
                 if let Some(post) = env.storage().persistent().get::<_, Post>(&post_key) {
                     let author = post.author.clone();
+
+                    // Snapshot the post and open an appeal window so the author
+                    // can contest this decision later.
+                    let removed_key = StorageKey::RemovedPost(post_id);
+                    env.storage().persistent().set(&removed_key, &post);
+                    Self::bump(&env, &removed_key);
+                    let moderation_key = StorageKey::ModerationRecord(post_id);
+                    env.storage().persistent().set(
+                        &moderation_key,
+                        &ModerationRecord {
+                            post_id,
+                            reporter: report.reporter.clone(),
+                            removed_ledger: env.ledger().sequence(),
+                            appeal_deadline: env
+                                .ledger()
+                                .sequence()
+                                .saturating_add(APPEAL_WINDOW_LEDGERS),
+                        },
+                    );
+                    Self::bump(&env, &moderation_key);
+
                     env.storage().persistent().remove(&post_key);
 
                     let author_key = StorageKey::AuthorPosts(author.clone());
@@ -3314,6 +3538,157 @@ impl LinkoraContract {
         report.status = verdict;
         env.storage().persistent().set(&report_key, &report);
         Self::bump(&env, &report_key);
+    }
+
+    /// File an appeal against a moderation decision. Only the removed post's
+    /// author may appeal, only while the window opened by `review_report` is
+    /// still open, and only once per moderation decision.
+    pub fn appeal_moderation(
+        env: Env,
+        appellant: Address,
+        post_id: u64,
+        reason_hash: BytesN<32>,
+    ) {
+        Self::bump_instance(&env);
+        appellant.require_auth();
+        validate_non_default_address(&env, "appellant", &appellant);
+        require_with_error!(&env, post_id > 0, "post id must be positive");
+
+        let record: ModerationRecord = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::ModerationRecord(post_id))
+            .unwrap_or_else(|| panic!("no moderation decision to appeal"));
+        let removed_post: Post = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::RemovedPost(post_id))
+            .expect("removed post not found");
+
+        assert!(
+            removed_post.author == appellant,
+            "only the post author can appeal"
+        );
+        require_with_error!(
+            &env,
+            env.ledger().sequence() <= record.appeal_deadline,
+            "appeal window has closed"
+        );
+        require_with_error!(
+            &env,
+            !env.storage().persistent().has(&StorageKey::Appeal(post_id)),
+            "appeal already filed"
+        );
+
+        let appeal = Appeal {
+            post_id,
+            appellant: appellant.clone(),
+            reason_hash,
+            filed_ledger: env.ledger().sequence(),
+            status: AppealStatus::Pending,
+            approvers: Vec::new(&env),
+            rejecters: Vec::new(&env),
+        };
+        let appeal_key = StorageKey::Appeal(post_id);
+        env.storage().persistent().set(&appeal_key, &appeal);
+        Self::bump(&env, &appeal_key);
+
+        AppealFiledEvent { version: EVENT_VERSION, post_id, appellant }.publish(&env);
+    }
+
+    /// Record a reviewer's verdict on an open appeal. Reviewers are the `mods`
+    /// pool admins; distinct reviewers are counted, and once `pool.threshold`
+    /// approve the post is restored, or once that many reject the appeal is
+    /// rejected.
+    pub fn review_appeal(env: Env, reviewer: Address, post_id: u64, approve: bool) {
+        Self::bump_instance(&env);
+        reviewer.require_auth();
+        validate_non_default_address(&env, "reviewer", &reviewer);
+        require_with_error!(&env, post_id > 0, "post id must be positive");
+
+        let pool: Pool = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::Pool(symbol_short!("mods")))
+            .expect("moderator pool 'mods' not found");
+        assert!(
+            pool.admins.iter().any(|x| x == reviewer),
+            "unauthorized reviewer"
+        );
+
+        let appeal_key = StorageKey::Appeal(post_id);
+        let mut appeal: Appeal = env
+            .storage()
+            .persistent()
+            .get(&appeal_key)
+            .expect("appeal not found");
+        require_with_error!(
+            &env,
+            appeal.status == AppealStatus::Pending,
+            "appeal already resolved"
+        );
+
+        let reviewed = if approve {
+            appeal.approvers.iter().any(|x| x == reviewer)
+        } else {
+            appeal.rejecters.iter().any(|x| x == reviewer)
+        };
+        if !reviewed {
+            if approve {
+                appeal.approvers.push_back(reviewer.clone());
+            } else {
+                appeal.rejecters.push_back(reviewer.clone());
+            }
+        }
+
+        if appeal.approvers.len() >= pool.threshold {
+            Self::restore_moderated_post(&env, post_id);
+            appeal.status = AppealStatus::Approved;
+            AppealResolvedEvent { version: EVENT_VERSION, post_id, approved: true }.publish(&env);
+        } else if appeal.rejecters.len() >= pool.threshold {
+            appeal.status = AppealStatus::Rejected;
+            AppealResolvedEvent { version: EVENT_VERSION, post_id, approved: false }.publish(&env);
+        }
+
+        env.storage().persistent().set(&appeal_key, &appeal);
+        Self::bump(&env, &appeal_key);
+    }
+
+    /// Read the appeal filed against a post's moderation decision, if any.
+    pub fn get_appeal(env: Env, post_id: u64) -> Option<Appeal> {
+        require_with_error!(&env, post_id > 0, "post id must be positive");
+        let key = StorageKey::Appeal(post_id);
+        let result: Option<Appeal> = env.storage().persistent().get(&key);
+        if result.is_some() {
+            Self::bump(&env, &key);
+        }
+        result
+    }
+
+    /// Re-insert a post removed by moderation and relink it to its author.
+    fn restore_moderated_post(env: &Env, post_id: u64) {
+        let removed_key = StorageKey::RemovedPost(post_id);
+        if let Some(post) = env.storage().persistent().get::<_, Post>(&removed_key) {
+            let post_key = StorageKey::Post(post_id);
+            env.storage().persistent().set(&post_key, &post);
+            Self::bump(env, &post_key);
+
+            let author_key = StorageKey::AuthorPosts(post.author.clone());
+            let mut author_posts: Vec<u64> = env
+                .storage()
+                .persistent()
+                .get(&author_key)
+                .unwrap_or(Vec::new(env));
+            if !author_posts.iter().any(|id| id == post_id) {
+                author_posts.push_back(post_id);
+                env.storage().persistent().set(&author_key, &author_posts);
+                Self::bump(env, &author_key);
+            }
+        }
+        env.storage().persistent().remove(&removed_key);
+        env.storage()
+            .persistent()
+            .remove(&StorageKey::ModerationRecord(post_id));
     }
 
     pub fn get_report(env: Env, post_id: u64, reporter: Address) -> Option<Report> {
