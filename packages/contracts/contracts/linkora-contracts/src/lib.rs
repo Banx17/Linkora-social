@@ -94,6 +94,8 @@ const PAUSED: Symbol = symbol_short!("PAUSED");
 // LEDGER_BUMP: target TTL (~30 days at 5s/ledger).
 // LEDGER_THRESHOLD: extend only when remaining TTL falls below this value.
 
+const EVENT_VERSION: u32 = 1;
+
 const LEDGER_BUMP: u32 = 535_000;
 const LEDGER_THRESHOLD: u32 = 535_000 - 100;
 
@@ -250,6 +252,8 @@ pub struct Report {
 #[derive(Clone)]
 pub struct RentPaidEvent {
     #[topic]
+    pub version: u32,
+    #[topic]
     pub user: Address,
     #[topic]
     pub payer: Address,
@@ -263,6 +267,8 @@ pub struct RentPaidEvent {
 #[derive(Clone)]
 pub struct ProfileSetEvent {
     #[topic]
+    pub version: u32,
+    #[topic]
     pub user: Address,
     pub username: String,
 }
@@ -270,6 +276,8 @@ pub struct ProfileSetEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct FollowEvent {
+    #[topic]
+    pub version: u32,
     #[topic]
     pub follower: Address,
     #[topic]
@@ -280,6 +288,8 @@ pub struct FollowEvent {
 #[derive(Clone)]
 pub struct UnfollowEvent {
     #[topic]
+    pub version: u32,
+    #[topic]
     pub follower: Address,
     #[topic]
     pub followee: Address,
@@ -288,6 +298,8 @@ pub struct UnfollowEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct BlockEvent {
+    #[topic]
+    pub version: u32,
     #[topic]
     pub blocker: Address,
     #[topic]
@@ -298,6 +310,8 @@ pub struct BlockEvent {
 #[derive(Clone)]
 pub struct UnblockEvent {
     #[topic]
+    pub version: u32,
+    #[topic]
     pub blocker: Address,
     #[topic]
     pub blocked: Address,
@@ -306,7 +320,9 @@ pub struct UnblockEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct PostCreatedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct PostCreatedEvent { version: EVENT_VERSION, #[topic]
     pub id: u64,
     #[topic]
     pub author: Address,
@@ -315,7 +331,9 @@ pub struct PostCreatedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct TipEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct TipEvent { version: EVENT_VERSION, #[topic]
     pub tipper: Address,
     #[topic]
     pub post_id: u64,
@@ -326,7 +344,9 @@ pub struct TipEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct PoolDepositEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct PoolDepositEvent { version: EVENT_VERSION, #[topic]
     pub depositor: Address,
     #[topic]
     pub pool_id: Symbol,
@@ -336,7 +356,9 @@ pub struct PoolDepositEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct PoolWithdrawEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct PoolWithdrawEvent { version: EVENT_VERSION, #[topic]
     pub recipient: Address,
     #[topic]
     pub pool_id: Symbol,
@@ -346,7 +368,9 @@ pub struct PoolWithdrawEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct PoolCreatedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct PoolCreatedEvent { version: EVENT_VERSION, #[topic]
     pub pool_id: Symbol,
     pub token: Address,
     pub admins: Vec<Address>,
@@ -356,7 +380,9 @@ pub struct PoolCreatedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct LikePostEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct LikePostEvent { version: EVENT_VERSION, #[topic]
     pub user: Address,
     #[topic]
     pub post_id: u64,
@@ -371,14 +397,18 @@ pub struct ContractUpgraded {
 #[contractevent]
 #[derive(Clone)]
 pub struct PausedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct PausedEvent { version: EVENT_VERSION, #[topic]
     pub admin: Address,
 }
 
 #[contractevent]
 #[derive(Clone)]
 pub struct UnpausedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct UnpausedEvent { version: EVENT_VERSION, #[topic]
     pub admin: Address,
 }
 
@@ -394,7 +424,9 @@ pub struct PostDeleted {
 #[contractevent]
 #[derive(Clone)]
 pub struct ProfileDeletedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct ProfileDeletedEvent { version: EVENT_VERSION, #[topic]
     pub user: Address,
     pub username: String,
 }
@@ -402,7 +434,9 @@ pub struct ProfileDeletedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct ProposalCreatedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct ProposalCreatedEvent { version: EVENT_VERSION, #[topic]
     pub pool_id: Symbol,
     #[topic]
     pub proposal_id: u64,
@@ -414,7 +448,9 @@ pub struct ProposalCreatedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct ProposalSignedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct ProposalSignedEvent { version: EVENT_VERSION, #[topic]
     pub pool_id: Symbol,
     #[topic]
     pub proposal_id: u64,
@@ -424,7 +460,9 @@ pub struct ProposalSignedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct ProposalExecutedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct ProposalExecutedEvent { version: EVENT_VERSION, #[topic]
     pub pool_id: Symbol,
     #[topic]
     pub proposal_id: u64,
@@ -435,7 +473,9 @@ pub struct ProposalExecutedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct PoolAdminAddedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct PoolAdminAddedEvent { version: EVENT_VERSION, #[topic]
     pub pool_id: Symbol,
     pub new_admin: Address,
 }
@@ -443,7 +483,9 @@ pub struct PoolAdminAddedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct PoolAdminRemovedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct PoolAdminRemovedEvent { version: EVENT_VERSION, #[topic]
     pub pool_id: Symbol,
     pub admin: Address,
 }
@@ -451,7 +493,9 @@ pub struct PoolAdminRemovedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct PoolThresholdUpdatedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct PoolThresholdUpdatedEvent { version: EVENT_VERSION, #[topic]
     pub pool_id: Symbol,
     pub old_threshold: u32,
     pub new_threshold: u32,
@@ -460,7 +504,9 @@ pub struct PoolThresholdUpdatedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct DmKeyPublishedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct DmKeyPublishedEvent { version: EVENT_VERSION, #[topic]
     pub user: Address,
     pub public_key: BytesN<32>,
 }
@@ -468,7 +514,9 @@ pub struct DmKeyPublishedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct CredentialRootUpdatedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct CredentialRootUpdatedEvent { version: EVENT_VERSION, #[topic]
     pub user: Address,
     pub root: BytesN<32>,
 }
@@ -476,7 +524,9 @@ pub struct CredentialRootUpdatedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct CredentialVerifiedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct CredentialVerifiedEvent { version: EVENT_VERSION, #[topic]
     pub user: Address,
     #[topic]
     pub nullifier: BytesN<32>,
@@ -485,7 +535,9 @@ pub struct CredentialVerifiedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct FeeUpdatedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct FeeUpdatedEvent { version: EVENT_VERSION, #[topic]
     pub name: Symbol,
     pub old_fee_bps: u32,
     pub new_fee_bps: u32,
@@ -494,7 +546,9 @@ pub struct FeeUpdatedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct TreasuryUpdatedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct TreasuryUpdatedEvent { version: EVENT_VERSION, #[topic]
     pub name: Symbol,
     pub old_treasury: Address,
     pub new_treasury: Address,
@@ -503,7 +557,9 @@ pub struct TreasuryUpdatedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct RoleGrantedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct RoleGrantedEvent { version: EVENT_VERSION, #[topic]
     pub role: Role,
     #[topic]
     pub account: Address,
@@ -513,7 +569,9 @@ pub struct RoleGrantedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct RoleRevokedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct RoleRevokedEvent { version: EVENT_VERSION, #[topic]
     pub role: Role,
     #[topic]
     pub account: Address,
@@ -523,7 +581,9 @@ pub struct RoleRevokedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct GovProposalCreatedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct GovProposalCreatedEvent { version: EVENT_VERSION, #[topic]
     pub proposal_id: u64,
     pub proposer: Address,
     pub parameter: GovParameter,
@@ -533,7 +593,9 @@ pub struct GovProposalCreatedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct GovVoteEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct GovVoteEvent { version: EVENT_VERSION, #[topic]
     pub proposal_id: u64,
     #[topic]
     pub voter: Address,
@@ -543,7 +605,9 @@ pub struct GovVoteEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct GovProposalExecutedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct GovProposalExecutedEvent { version: EVENT_VERSION, #[topic]
     pub proposal_id: u64,
     pub parameter: GovParameter,
     pub new_value: u64,
@@ -552,21 +616,27 @@ pub struct GovProposalExecutedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct GovProposalVetoedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct GovProposalVetoedEvent { version: EVENT_VERSION, #[topic]
     pub proposal_id: u64,
 }
 
 #[contractevent]
 #[derive(Clone)]
 pub struct EmergencyBypassEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct EmergencyBypassEvent { version: EVENT_VERSION, #[topic]
     pub action: Symbol,
 }
 
 #[contractevent]
 #[derive(Clone)]
 pub struct AttestationVerifiedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct AttestationVerifiedEvent { version: EVENT_VERSION, #[topic]
     pub oracle_name: Symbol,
     #[topic]
     pub report_hash: BytesN<32>,
@@ -578,7 +648,9 @@ pub struct AttestationVerifiedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct PostReportedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct PostReportedEvent { version: EVENT_VERSION, #[topic]
     pub post_id: u64,
     #[topic]
     pub reporter: Address,
@@ -588,7 +660,9 @@ pub struct PostReportedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct PostRemovedByModerationEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    pub struct PostRemovedByModerationEvent { version: EVENT_VERSION, #[topic]
     pub post_id: u64,
     #[topic]
     pub reporter: Address,
@@ -597,7 +671,13 @@ pub struct PostRemovedByModerationEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct ReportDismissedEvent {
-    #[topic]
+        #[topic]
+        pub version: u32
+    #[contractevent]
+    #[derive(Clone)]
+    pub struct ReportDismissedEvent {
+        #[topic]
+        pub version: u32,
     pub post_id: u64,
     #[topic]
     pub reporter: Address,
@@ -668,15 +748,13 @@ impl LinkoraContract {
             },
         );
 
-        RoleGrantedEvent {
-            role: Role::Admin,
+        RoleGrantedEvent { version: EVENT_VERSION, role: Role::Admin,
             account: admin.clone(),
             sender: admin.clone(),
         }
         .publish(&env);
 
-        RoleGrantedEvent {
-            role: Role::Upgrader,
+        RoleGrantedEvent { version: EVENT_VERSION, role: Role::Upgrader,
             account: admin.clone(),
             sender: admin,
         }
@@ -696,8 +774,7 @@ impl LinkoraContract {
         roles.set(account.clone(), updated);
         env.storage().instance().set(&ROLES, &roles);
 
-        RoleGrantedEvent {
-            role,
+        RoleGrantedEvent { version: EVENT_VERSION, role,
             account,
             sender: admin,
         }
@@ -717,8 +794,7 @@ impl LinkoraContract {
         roles.set(account.clone(), updated);
         env.storage().instance().set(&ROLES, &roles);
 
-        RoleRevokedEvent {
-            role,
+        RoleRevokedEvent { version: EVENT_VERSION, role,
             account,
             sender: admin,
         }
@@ -802,7 +878,7 @@ impl LinkoraContract {
         env.storage().persistent().set(&username_index_key, &user);
         Self::bump(&env, &key);
         Self::bump(&env, &username_index_key);
-        ProfileSetEvent { user, username }.publish(&env);
+        ProfileSetEvent { version: EVENT_VERSION, user, username }.publish(&env);
     }
 
     pub fn get_profile(env: Env, user: Address) -> Option<Profile> {
@@ -857,8 +933,7 @@ impl LinkoraContract {
             .get(&key)
             .unwrap_or_else(|| panic!("profile does not exist"));
 
-        ProfileDeletedEvent {
-            user: user.clone(),
+        ProfileDeletedEvent { version: EVENT_VERSION, user: user.clone(),
             username: profile.username.clone(),
         }
         .publish(&env);
@@ -1066,8 +1141,7 @@ impl LinkoraContract {
         env.storage().persistent().set(&key, &new_root);
         Self::bump(&env, &key);
 
-        CredentialRootUpdatedEvent {
-            user,
+        CredentialRootUpdatedEvent { version: EVENT_VERSION, user,
             root: new_root,
         }
         .publish(&env);
@@ -1107,7 +1181,7 @@ impl LinkoraContract {
         Self::bump(&env, &root_key);
         Self::bump(&env, &nullifier_key);
 
-        CredentialVerifiedEvent { user, nullifier }.publish(&env);
+        CredentialVerifiedEvent { version: EVENT_VERSION, user, nullifier }.publish(&env);
         true
     }
 
@@ -1132,8 +1206,7 @@ impl LinkoraContract {
         env.storage().persistent().set(&key, &x25519_pubkey);
         Self::bump(&env, &key);
 
-        DmKeyPublishedEvent {
-            user,
+        DmKeyPublishedEvent { version: EVENT_VERSION, user,
             public_key: x25519_pubkey,
         }
         .publish(&env);
@@ -1266,7 +1339,7 @@ impl LinkoraContract {
             Self::bump(&env, &StorageKey::FollowersCount(followee.clone()));
         }
 
-        FollowEvent { follower, followee }.publish(&env);
+        FollowEvent { version: EVENT_VERSION, follower, followee }.publish(&env);
     }
 
     pub fn unfollow(env: Env, follower: Address, followee: Address) {
@@ -1298,7 +1371,7 @@ impl LinkoraContract {
             );
         }
 
-        UnfollowEvent { follower, followee }.publish(&env);
+        UnfollowEvent { version: EVENT_VERSION, follower, followee }.publish(&env);
     }
 
     pub fn get_following(env: Env, user: Address, offset: u32, limit: u32) -> Vec<Address> {
@@ -1482,7 +1555,7 @@ impl LinkoraContract {
         // Clean up like entries between blocker and blocked
         Self::cleanup_likes_on_block(&env, &blocker, &blocked);
 
-        BlockEvent { blocker, blocked }.publish(&env);
+        BlockEvent { version: EVENT_VERSION, blocker, blocked }.publish(&env);
     }
 
     pub fn unblock_user(env: Env, blocker: Address, blocked: Address) {
@@ -1505,7 +1578,7 @@ impl LinkoraContract {
         blocks.remove(blocked.clone());
         env.storage().persistent().set(&key, &blocks);
         Self::bump(&env, &key);
-        UnblockEvent { blocker, blocked }.publish(&env);
+        UnblockEvent { version: EVENT_VERSION, blocker, blocked }.publish(&env);
     }
 
     pub fn is_blocked(env: Env, blocker: Address, blocked: Address) -> bool {
@@ -1555,7 +1628,7 @@ impl LinkoraContract {
         env.storage().persistent().set(&author_key, &author_posts);
         Self::bump(&env, &author_key);
 
-        PostCreatedEvent { id, author }.publish(&env);
+        PostCreatedEvent { version: EVENT_VERSION, id, author }.publish(&env);
         id
     }
 
@@ -1770,7 +1843,7 @@ impl LinkoraContract {
 
         env.storage().persistent().set(&like_key, &true);
         Self::bump(&env, &like_key);
-        LikePostEvent { user, post_id }.publish(&env);
+        LikePostEvent { version: EVENT_VERSION, user, post_id }.publish(&env);
     }
 
     pub fn get_like_count(env: Env, post_id: u64) -> u64 {
@@ -1866,8 +1939,7 @@ impl LinkoraContract {
         }
         token_client.transfer(&tipper, &post.author, &author_amount);
 
-        TipEvent {
-            tipper,
+        TipEvent { version: EVENT_VERSION, tipper,
             post_id,
             amount,
             fee: fee_amount,
@@ -1913,8 +1985,7 @@ impl LinkoraContract {
         );
         Self::bump(&env, &key);
 
-        PoolCreatedEvent {
-            pool_id,
+        PoolCreatedEvent { version: EVENT_VERSION, pool_id,
             token: token_copy,
             admins: admins_for_event,
             threshold,
@@ -1952,8 +2023,7 @@ impl LinkoraContract {
             &amount,
         );
 
-        PoolDepositEvent {
-            depositor,
+        PoolDepositEvent { version: EVENT_VERSION, depositor,
             pool_id,
             amount,
         }
@@ -1998,8 +2068,7 @@ impl LinkoraContract {
             &amount,
         );
 
-        PoolWithdrawEvent {
-            recipient,
+        PoolWithdrawEvent { version: EVENT_VERSION, recipient,
             pool_id,
             amount,
         }
@@ -2055,7 +2124,7 @@ impl LinkoraContract {
         env.storage().persistent().set(&key, &pool);
         Self::bump(&env, &key);
 
-        PoolAdminAddedEvent { pool_id, new_admin }.publish(&env);
+        PoolAdminAddedEvent { version: EVENT_VERSION, pool_id, new_admin }.publish(&env);
     }
 
     pub fn remove_pool_admin(env: Env, signers: Vec<Address>, pool_id: Symbol, admin: Address) {
@@ -2096,7 +2165,7 @@ impl LinkoraContract {
         env.storage().persistent().set(&key, &pool);
         Self::bump(&env, &key);
 
-        PoolAdminRemovedEvent { pool_id, admin }.publish(&env);
+        PoolAdminRemovedEvent { version: EVENT_VERSION, pool_id, admin }.publish(&env);
     }
 
     pub fn update_pool_threshold(env: Env, signers: Vec<Address>, pool_id: Symbol, threshold: u32) {
@@ -2129,8 +2198,7 @@ impl LinkoraContract {
         env.storage().persistent().set(&key, &pool);
         Self::bump(&env, &key);
 
-        PoolThresholdUpdatedEvent {
-            pool_id,
+        PoolThresholdUpdatedEvent { version: EVENT_VERSION, pool_id,
             old_threshold,
             new_threshold: threshold,
         }
@@ -2149,14 +2217,12 @@ impl LinkoraContract {
         assert!(fee_bps <= 10_000, "invalid fee");
         let old_fee_bps = Self::get_fee_bps(env.clone());
         env.storage().instance().set(&FEE_BPS, &fee_bps);
-        FeeUpdatedEvent {
-            name: symbol_short!("fee_upd"),
+        FeeUpdatedEvent { version: EVENT_VERSION, name: symbol_short!("fee_upd"),
             old_fee_bps,
             new_fee_bps: fee_bps,
         }
         .publish(&env);
-        EmergencyBypassEvent {
-            action: symbol_short!("set_fee"),
+        EmergencyBypassEvent { version: EVENT_VERSION, action: symbol_short!("set_fee"),
         }
         .publish(&env);
     }
@@ -2170,14 +2236,12 @@ impl LinkoraContract {
         Self::require_not_paused(&env);
         let old_treasury = Self::get_treasury(env.clone()).expect("treasury not set");
         env.storage().instance().set(&TREASURY, &treasury);
-        TreasuryUpdatedEvent {
-            name: symbol_short!("treas_upd"),
+        TreasuryUpdatedEvent { version: EVENT_VERSION, name: symbol_short!("treas_upd"),
             old_treasury,
             new_treasury: treasury,
         }
         .publish(&env);
-        EmergencyBypassEvent {
-            action: symbol_short!("set_tres"),
+        EmergencyBypassEvent { version: EVENT_VERSION, action: symbol_short!("set_tres"),
         }
         .publish(&env);
     }
@@ -2337,8 +2401,7 @@ impl LinkoraContract {
         env.storage().persistent().set(&count_key, &id);
         Self::bump(&env, &count_key);
 
-        GovProposalCreatedEvent {
-            proposal_id: id,
+        GovProposalCreatedEvent { version: EVENT_VERSION, proposal_id: id,
             proposer,
             parameter,
             new_value,
@@ -2389,8 +2452,7 @@ impl LinkoraContract {
         env.storage().persistent().set(&proposal_key, &proposal);
         Self::bump(&env, &proposal_key);
 
-        GovVoteEvent {
-            proposal_id,
+        GovVoteEvent { version: EVENT_VERSION, proposal_id,
             voter,
             support,
         }
@@ -2520,8 +2582,7 @@ impl LinkoraContract {
         env.storage().persistent().set(&proposal_key, &proposal);
         Self::bump(&env, &proposal_key);
 
-        GovProposalExecutedEvent {
-            proposal_id,
+        GovProposalExecutedEvent { version: EVENT_VERSION, proposal_id,
             parameter: proposal.parameter,
             new_value: proposal.new_value,
         }
@@ -2579,7 +2640,7 @@ impl LinkoraContract {
         env.storage().persistent().set(&proposal_key, &proposal);
         Self::bump(&env, &proposal_key);
 
-        GovProposalVetoedEvent { proposal_id }.publish(&env);
+        GovProposalVetoedEvent { version: EVENT_VERSION, proposal_id }.publish(&env);
     }
 
     pub fn gov_get_proposal(env: Env, proposal_id: u64) -> GovProposal {
@@ -2657,8 +2718,7 @@ impl LinkoraContract {
         env.storage().persistent().set(&nullifier_key, &true);
         Self::bump(&env, &nullifier_key);
 
-        AttestationVerifiedEvent {
-            oracle_name,
+        AttestationVerifiedEvent { version: EVENT_VERSION, oracle_name,
             report_hash,
             creator,
             window_start,
@@ -2747,8 +2807,7 @@ impl LinkoraContract {
         }
 
         let extended_to_ledger = Self::get_rent_expiry(env.clone(), user.clone());
-        RentPaidEvent {
-            user: user.clone(),
+        RentPaidEvent { version: EVENT_VERSION, user: user.clone(),
             payer: user,
             token,
             amount,
@@ -2815,8 +2874,7 @@ impl LinkoraContract {
         env.storage().persistent().set(&report_key, &report);
         Self::bump(&env, &report_key);
 
-        PostReportedEvent {
-            post_id,
+        PostReportedEvent { version: EVENT_VERSION, post_id,
             reporter,
             stake_amount,
         }
@@ -3105,8 +3163,7 @@ impl LinkoraContract {
                     &report.stake_amount,
                 );
 
-                PostRemovedByModerationEvent {
-                    post_id,
+                PostRemovedByModerationEvent { version: EVENT_VERSION, post_id,
                     reporter: report.reporter.clone(),
                 }
                 .publish(&env);
@@ -3124,8 +3181,7 @@ impl LinkoraContract {
                     &report.stake_amount,
                 );
 
-                ReportDismissedEvent {
-                    post_id,
+                ReportDismissedEvent { version: EVENT_VERSION, post_id,
                     reporter: report.reporter.clone(),
                 }
                 .publish(&env);
@@ -3202,7 +3258,7 @@ impl LinkoraContract {
         }
         env.storage().instance().set(&PAUSED, &true);
         let admin: Address = env.current_contract_address();
-        PausedEvent { admin }.publish(&env);
+        PausedEvent { version: EVENT_VERSION, admin }.publish(&env);
     }
 
     pub fn unpause(env: Env) {
@@ -3212,7 +3268,7 @@ impl LinkoraContract {
         }
         env.storage().instance().set(&PAUSED, &false);
         let admin: Address = env.current_contract_address();
-        UnpausedEvent { admin }.publish(&env);
+        UnpausedEvent { version: EVENT_VERSION, admin }.publish(&env);
     }
 
     pub fn is_paused(env: Env) -> bool {

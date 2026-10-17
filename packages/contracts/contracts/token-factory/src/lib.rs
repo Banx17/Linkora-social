@@ -14,17 +14,18 @@ const INIT: Symbol = symbol_short!("INIT");
 
 // ── TTL ───────────────────────────────────────────────────────────────────────
 
+const EVENT_VERSION: u32 = 1;
 const LEDGER_BUMP: u32 = 535_000;
 const LEDGER_THRESHOLD: u32 = 535_000 - 100;
 
 // ── Events ────────────────────────────────────────────────────────────────────
 
 /// Emitted when a creator token is successfully deployed via the factory.
-///
-/// Topics: (TokenFactory, token_deployed, v1)
 #[contractevent]
 #[derive(Clone)]
 pub struct CreatorTokenDeployedEvent {
+    #[topic]
+    pub version: u32,
     #[topic]
     pub deployer: Address,
     #[topic]
@@ -148,6 +149,7 @@ impl TokenFactoryContract {
 
         // Emit canonical factory event.
         CreatorTokenDeployedEvent {
+            version: EVENT_VERSION,
             deployer,
             token_address: token_address.clone(),
             name,
