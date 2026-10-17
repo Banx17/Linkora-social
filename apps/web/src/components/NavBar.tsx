@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useWallet } from "@/hooks/useWallet";
+import { ConnectError } from "@/components/WalletProvider";
 import SearchBar from "@/components/SearchBar";
 import { BottomNav } from "@/components/mobile/BottomNav";
 import { useNotificationsContext } from "@/contexts/NotificationsContext";
@@ -25,7 +26,7 @@ function truncateAddress(address: string): string {
 
 export function NavBar() {
   const router = useRouter();
-  const { address, connected, network, connect, disconnect } = useWallet();
+  const { address, connected, network, connect, disconnect, isConnecting } = useWallet();
   const { unreadCount } = useNotificationsContext();
   const { registerComposeHandler, unregisterComposeHandler, registerSearchRef } =
     useKeyboardShortcutsContext();
@@ -60,7 +61,13 @@ export function NavBar() {
   const handleConnect = useCallback(async () => {
     try {
       await connect();
-    } catch {
+    } catch (err) {
+      // ConnectError gives us a typed reason so we can show the right message.
+      if (err instanceof ConnectError && err.reason === "declined") {
+        // User dismissed the Freighter prompt — don't show the install banner.
+        return;
+      }
+      // "not-installed", "no-address", or any unexpected error → show banner.
       setShowFreighterBanner(true);
     }
   }, [connect]);
@@ -271,11 +278,13 @@ export function NavBar() {
           ) : (
             <button
               onClick={handleConnect}
-              className="rounded-lg bg-violet-600 px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-semibold text-white hover:bg-violet-500 transition-colors"
-              aria-label="Connect Freighter wallet"
+              disabled={isConnecting}
+              className="rounded-lg bg-violet-600 px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-semibold text-white hover:bg-violet-500 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+              aria-label={isConnecting ? "Connecting wallet…" : "Connect Freighter wallet"}
+              aria-busy={isConnecting}
               data-testid="connect-wallet"
             >
-              Connect
+              {isConnecting ? "Connecting…" : "Connect"}
             </button>
           )}
         </div>
@@ -285,7 +294,7 @@ export function NavBar() {
       <CreatePostModal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
-        author={address}
+        author={address ?? undefined}
       />
 
       {/* Wallet Modal */}

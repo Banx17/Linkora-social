@@ -8,7 +8,8 @@
     "dev": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "build": "expo build",
+    "build": "expo export --platform ios",
+    "typecheck": "tsc --noEmit",
     "lint": "eslint . --ext .ts,.tsx",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "test": "jest"
@@ -40,6 +41,7 @@
     "expo-router": "~57.0.8",
     "expo-secure-store": "~57.0.1",
     "expo-sqlite": "~57.0.1",
+    "linkora-sdk": "workspace:*",
     "lucide-react-native": "^0.511.0",
     "react": "19.2.3",
     "react-native": "0.86.0",

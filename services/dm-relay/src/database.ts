@@ -3,6 +3,17 @@
  */
 
 import { Pool } from "pg";
+import fs from "fs";
+import path from "path";
+import { logger } from "./logger";
+import {
+  attachPoolMonitoring,
+  checkPoolHealth,
+  getPoolMetrics,
+  type PoolMetrics,
+  type PoolHealthResult,
+} from "./db-pool-monitor";
+import { optionalInt } from "./config";
 
 export interface DbMessage {
   id: string;
@@ -19,77 +30,121 @@ export interface DbMessage {
 // completed" — real HTTP status codes are always >= 100.
 const IDEMPOTENCY_PENDING_STATUS = 0;
 
+/**
+ * Retention cleanup removes rows in bounded batches.
+ *
+ * A single unbounded `DELETE` over the whole expired backlog takes one long
+ * exclusive lock on the table, produces one large WAL/dead-tuple burst, and
+ * rolls back every row at once if it fails — all of which stall live message
+ * traffic. Deleting oldest-first in batches keeps each statement short and
+ * resumable, and lets the loop pause between batches.
+ */
+const CLEANUP_BATCH_SIZE = 1000;
+
+/** Pause between cleanup batches so live traffic is never starved. */
+const CLEANUP_BATCH_PAUSE_MS = 25;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Clamp a caller-supplied batch size to a positive integer. */
+function normaliseBatchSize(batchSize: number): number {
+  return Math.max(1, Math.floor(batchSize));
+}
+
 export type IdempotencyClaimResult =
   | { status: "claimed" }
   | { status: "in_progress" }
-  | { status: "cached"; responseStatus: number; responseBody: unknown };
+  | { status: "cached"; responseStatus: number; responseBody: unknown }
+  | { status: "conflict" };
 
 class Database {
   private pool: Pool;
 
   constructor(connectionString: string) {
+    // Tunable via env (issue #888); defaults match the pre-existing values.
     this.pool = new Pool({
       connectionString,
-      max: 20,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 2000,
+      max: optionalInt("DB_POOL_MAX", 20),
+      idleTimeoutMillis: optionalInt("DB_POOL_IDLE_TIMEOUT_MS", 30000),
+      connectionTimeoutMillis: optionalInt("DB_POOL_CONNECTION_TIMEOUT_MS", 2000),
+    });
+    // pool.on('error') is required: without it, an idle client that dies
+    // (e.g. Postgres restarting underneath it) crashes the process instead
+    // of being logged and discarded.
+    attachPoolMonitoring(this.pool, {
+      logger,
+      serviceName: "dm-relay",
+      statsIntervalMs: optionalInt("DB_POOL_STATS_INTERVAL_MS", 0),
     });
   }
 
+  /** Current pool utilisation (active, idle, waiting) — issue #888. */
+  getPoolMetrics(): PoolMetrics {
+    return getPoolMetrics(this.pool);
+  }
+
+  /** Proactive `SELECT 1` health check, distinct from metrics — issue #888. */
+  async getPoolHealth(): Promise<PoolHealthResult> {
+    return checkPoolHealth(this.pool);
+  }
+
   async init(): Promise<void> {
-    await this.createTables();
-    console.log("Database initialized successfully");
+    await this.runMigrations();
+    logger.info("Database initialized successfully");
   }
 
   async ping(): Promise<void> {
     await this.pool.query("SELECT 1");
   }
 
-  private async createTables(): Promise<void> {
-    const createMessagesTable = `
-      CREATE TABLE IF NOT EXISTS dm_messages (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        conversation_id VARCHAR(64) NOT NULL,
-        sender VARCHAR(56) NOT NULL,
-        recipient VARCHAR(56) NOT NULL,
-        ciphertext_b64 TEXT NOT NULL,
-        message_index INTEGER NOT NULL,
-        timestamp BIGINT NOT NULL,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-        
-        CONSTRAINT unique_sender_message_index UNIQUE (sender, recipient, message_index)
+  private async runMigrations(): Promise<void> {
+    // #1527 — Use a single checked-out client for the entire migration
+    // sequence so BEGIN/DDL/INSERT/COMMIT all execute on the same connection.
+    // Previous code used pool.query for each statement, which could check out
+    // a different client per call, leaving partial schema on failure.
+    const client = await this.pool.connect();
+    try {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+          filename   VARCHAR(255) PRIMARY KEY,
+          applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
+
+      const appliedResult = await client.query(
+        "SELECT filename FROM schema_migrations ORDER BY filename"
       );
-    `;
+      const applied = new Set(appliedResult.rows.map((r) => r.filename));
 
-    const createIndexes = `
-      CREATE INDEX IF NOT EXISTS idx_dm_messages_conversation_created
-        ON dm_messages (conversation_id, created_at DESC);
+      const migrationsDir = path.resolve(__dirname, "../migrations");
+      const files = fs
+        .readdirSync(migrationsDir)
+        .filter((f) => f.endsWith(".sql"))
+        .sort();
 
-      CREATE INDEX IF NOT EXISTS idx_dm_messages_created_at
-        ON dm_messages (created_at);
+      for (const filename of files) {
+        if (applied.has(filename)) continue;
 
-      CREATE INDEX IF NOT EXISTS idx_dm_messages_timestamp
-        ON dm_messages (timestamp);
-    `;
+        const sql = fs.readFileSync(path.join(migrationsDir, filename), "utf-8");
 
-    const createIdempotencyTable = `
-      CREATE TABLE IF NOT EXISTS message_idempotency (
-        idempotency_key UUID PRIMARY KEY,
-        response_status INT NOT NULL,
-        response_body JSONB NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-    `;
-
-    const createIdempotencyIndex = `
-      CREATE INDEX IF NOT EXISTS idx_message_idempotency_created_at
-        ON message_idempotency (created_at);
-    `;
-
-    await this.pool.query(createMessagesTable);
-    await this.pool.query(createIndexes);
-    await this.pool.query(createIdempotencyTable);
-    await this.pool.query(createIdempotencyIndex);
+        logger.info({ migration: filename }, "Applying migration");
+        await client.query("BEGIN");
+        try {
+          await client.query(sql);
+          await client.query("INSERT INTO schema_migrations (filename) VALUES ($1)", [filename]);
+          await client.query("COMMIT");
+          logger.info({ migration: filename }, "Migration applied");
+        } catch (error) {
+          await client.query("ROLLBACK");
+          logger.error({ migration: filename, err: error }, "Migration failed");
+          throw error;
+        }
+      }
+    } finally {
+      client.release();
+    }
   }
 
   async insertMessage(
@@ -124,10 +179,10 @@ class Database {
   async getMessages(
     conversationId: string,
     limit: number = 50,
-    beforeCreatedAt?: Date
+    cursor?: { createdAt: Date; id: string }
   ): Promise<DbMessage[]> {
     let query = `
-      SELECT id, conversation_id, sender, recipient, ciphertext_b64, 
+      SELECT id, conversation_id, sender, recipient, ciphertext_b64,
              message_index, timestamp, created_at
       FROM dm_messages
       WHERE conversation_id = $1
@@ -135,12 +190,14 @@ class Database {
 
     const values: (string | number | Date)[] = [conversationId];
 
-    if (beforeCreatedAt) {
-      query += " AND created_at < $2";
-      values.push(beforeCreatedAt);
+    // #1529 — Composite cursor: (created_at, id) to prevent skipping
+    // messages that share a timestamp within the same transaction.
+    if (cursor) {
+      query += " AND (created_at, id) < ($2, $3)";
+      values.push(cursor.createdAt, cursor.id);
     }
 
-    query += " ORDER BY created_at DESC LIMIT $" + (values.length + 1);
+    query += " ORDER BY created_at DESC, id DESC LIMIT $" + (values.length + 1);
     values.push(limit);
 
     const result = await this.pool.query(query, values);
@@ -150,7 +207,7 @@ class Database {
   async getMessagesByRecipient(
     recipient: string,
     limit: number = 50,
-    beforeCreatedAt?: Date
+    cursor?: { createdAt: Date; id: string }
   ): Promise<DbMessage[]> {
     let query = `
       SELECT id, conversation_id, sender, recipient, ciphertext_b64,
@@ -161,12 +218,14 @@ class Database {
 
     const values: (string | number | Date)[] = [recipient];
 
-    if (beforeCreatedAt) {
-      query += " AND created_at < $2";
-      values.push(beforeCreatedAt);
+    // #1529 — Composite cursor: (created_at, id) to prevent skipping
+    // messages that share a timestamp within the same transaction.
+    if (cursor) {
+      query += " AND (created_at, id) < ($2, $3)";
+      values.push(cursor.createdAt, cursor.id);
     }
 
-    query += " ORDER BY created_at DESC LIMIT $" + (values.length + 1);
+    query += " ORDER BY created_at DESC, id DESC LIMIT $" + (values.length + 1);
     values.push(limit);
 
     const result = await this.pool.query(query, values);
@@ -179,62 +238,167 @@ class Database {
     return parseInt(result.rows[0].count);
   }
 
-  async deleteExpiredMessages(ttlDays: number): Promise<number> {
-    const query = `
-      DELETE FROM dm_messages
-      WHERE created_at < NOW() - INTERVAL '${ttlDays} days'
-    `;
-
-    const result = await this.pool.query(query);
-    return result.rowCount || 0;
+  /**
+   * Whether `address` is a sender or recipient of any message in
+   * `conversationId` (issue #1331).
+   *
+   * `conversation_id` is a deterministic hash of the two participant
+   * addresses, so it does not itself prove who they are; this checks
+   * membership against the actual message rows before a caller is allowed to
+   * read a conversation's metadata. A conversation with no messages yet has
+   * no rows to match, so it returns `false` — nobody can prove membership of
+   * an empty conversation, and there is nothing in it to protect either way.
+   */
+  async isConversationParticipant(conversationId: string, address: string): Promise<boolean> {
+    const query =
+      "SELECT 1 FROM dm_messages WHERE conversation_id = $1 AND (sender = $2 OR recipient = $2) LIMIT 1";
+    const result = await this.pool.query(query, [conversationId, address]);
+    return (result.rowCount ?? 0) > 0;
   }
 
   /**
-   * Atomically claim an idempotency key for processing.
+   * Delete every message older than `ttlDays`, in bounded batches.
    *
-   * - 'claimed': no prior attempt exists; the caller owns processing and
-   *   must call `completeIdempotencyKey` once it has a response.
-   * - 'cached': a prior attempt already completed; the caller should replay
-   *   the stored response instead of reprocessing.
-   * - 'in_progress': a concurrent request already claimed this key and
-   *   hasn't finished yet.
+   * Each statement removes at most `batchSize` rows (oldest first, matching
+   * the `created_at` index) and the loop stops as soon as a batch comes back
+   * short — which means the expired backlog is drained. Returns the total
+   * number of rows removed across all batches.
    */
-  async claimIdempotencyKey(key: string): Promise<IdempotencyClaimResult> {
+  async deleteExpiredMessages(
+    ttlDays: number,
+    batchSize: number = CLEANUP_BATCH_SIZE
+  ): Promise<number> {
+    const limit = normaliseBatchSize(batchSize);
+    let total = 0;
+
+    for (;;) {
+      const result = await this.pool.query(
+        `
+        DELETE FROM dm_messages
+        WHERE id IN (
+          SELECT id
+          FROM dm_messages
+          WHERE created_at < NOW() - $1::integer * INTERVAL '1 day'
+          ORDER BY created_at
+          LIMIT $2
+        )
+        `,
+        [ttlDays, limit]
+      );
+
+      const deleted = result.rowCount || 0;
+      total += deleted;
+
+      // A short batch means there is nothing left that is expired.
+      if (deleted < limit) return total;
+
+      logger.info({ deleted, total }, "Expired-message cleanup batch deleted");
+      await sleep(CLEANUP_BATCH_PAUSE_MS);
+    }
+  }
+
+  /**
+   * Atomically claim an idempotency key for processing, scoped to the
+   * authenticated sender. Two different senders reusing the same
+   * client-generated key are independent — the key alone is not a global
+   * lock.
+   *
+   * - 'claimed': no prior attempt exists for this (sender, key); the caller
+   *   owns processing and must call `completeIdempotencyKey` once it has a
+   *   response.
+   * - 'cached': a prior attempt for this (sender, key) with the same payload
+   *   already completed; the caller should replay the stored response
+   *   instead of reprocessing.
+   * - 'in_progress': a concurrent request already claimed this (sender, key)
+   *   with the same payload and hasn't finished yet.
+   * - 'conflict': this (sender, key) pair was already used with a
+   *   *different* payload.
+   */
+  async claimIdempotencyKey(
+    senderAddress: string,
+    key: string,
+    requestFingerprint: string
+  ): Promise<IdempotencyClaimResult> {
     const insertQuery = `
-      INSERT INTO message_idempotency (idempotency_key, response_status, response_body)
-      VALUES ($1, $2, '{}'::jsonb)
-      ON CONFLICT (idempotency_key) DO NOTHING
+      INSERT INTO message_idempotency
+        (sender_address, idempotency_key, response_status, response_body, request_fingerprint)
+      VALUES ($1, $2, $3, '{}'::jsonb, $4)
+      ON CONFLICT (sender_address, idempotency_key) DO NOTHING
       RETURNING idempotency_key
     `;
 
-    const insertResult = await this.pool.query(insertQuery, [key, IDEMPOTENCY_PENDING_STATUS]);
+    const insertResult = await this.pool.query(insertQuery, [
+      senderAddress,
+      key,
+      IDEMPOTENCY_PENDING_STATUS,
+      requestFingerprint,
+    ]);
     if (insertResult.rowCount && insertResult.rowCount > 0) {
       return { status: "claimed" };
     }
 
-    const cached = await this.getIdempotencyResponse(key);
-    if (cached) {
-      return {
-        status: "cached",
-        responseStatus: cached.responseStatus,
-        responseBody: cached.responseBody,
-      };
+    const existing = await this.getIdempotencyRecord(senderAddress, key);
+    if (!existing) {
+      // The row was pruned (expired) between the failed insert and this
+      // read; treat it as a concurrent claim still settling.
+      return { status: "in_progress" };
     }
-    return { status: "in_progress" };
+
+    if (existing.requestFingerprint !== requestFingerprint) {
+      return { status: "conflict" };
+    }
+
+    if (existing.responseStatus === IDEMPOTENCY_PENDING_STATUS) {
+      return { status: "in_progress" };
+    }
+
+    return {
+      status: "cached",
+      responseStatus: existing.responseStatus,
+      responseBody: existing.responseBody,
+    };
+  }
+
+  /**
+   * Fetch the idempotency record for (senderAddress, key), pending or
+   * completed, along with the fingerprint of the payload that claimed it.
+   */
+  private async getIdempotencyRecord(
+    senderAddress: string,
+    key: string
+  ): Promise<{
+    responseStatus: number;
+    responseBody: unknown;
+    requestFingerprint: string;
+  } | null> {
+    const query = `
+      SELECT response_status, response_body, request_fingerprint
+      FROM message_idempotency
+      WHERE sender_address = $1 AND idempotency_key = $2
+    `;
+    const result = await this.pool.query(query, [senderAddress, key]);
+    if (result.rowCount === 0) return null;
+
+    return {
+      responseStatus: result.rows[0].response_status,
+      responseBody: result.rows[0].response_body,
+      requestFingerprint: result.rows[0].request_fingerprint,
+    };
   }
 
   /**
    * Fetch a completed (non-pending) idempotency response, if one exists.
    */
   async getIdempotencyResponse(
+    senderAddress: string,
     key: string
   ): Promise<{ responseStatus: number; responseBody: unknown } | null> {
     const query = `
       SELECT response_status, response_body
       FROM message_idempotency
-      WHERE idempotency_key = $1 AND response_status <> $2
+      WHERE sender_address = $1 AND idempotency_key = $2 AND response_status <> $3
     `;
-    const result = await this.pool.query(query, [key, IDEMPOTENCY_PENDING_STATUS]);
+    const result = await this.pool.query(query, [senderAddress, key, IDEMPOTENCY_PENDING_STATUS]);
     if (result.rowCount === 0) return null;
 
     return {
@@ -247,24 +411,60 @@ class Database {
    * Record the final response for a claimed idempotency key so future
    * duplicate submissions can replay it instead of reprocessing.
    */
-  async completeIdempotencyKey(key: string, status: number, body: unknown): Promise<void> {
+  async completeIdempotencyKey(
+    senderAddress: string,
+    key: string,
+    status: number,
+    body: unknown
+  ): Promise<void> {
     const query = `
       UPDATE message_idempotency
-      SET response_status = $2, response_body = $3
-      WHERE idempotency_key = $1
+      SET response_status = $3, response_body = $4
+      WHERE sender_address = $1 AND idempotency_key = $2
     `;
-    await this.pool.query(query, [key, status, JSON.stringify(body)]);
+    await this.pool.query(query, [senderAddress, key, status, JSON.stringify(body)]);
   }
 
-  async deleteExpiredIdempotencyKeys(ttlHours: number): Promise<number> {
+  /**
+   * Delete every idempotency key older than `ttlHours`, in bounded batches.
+   *
+   * Same batching rationale as {@link deleteExpiredMessages}: the primary key
+   * is the composite (sender_address, idempotency_key), so each batch selects
+   * up to `batchSize` expired keys oldest-first and deletes exactly those.
+   * Returns the total number of rows removed across all batches.
+   */
+  async deleteExpiredIdempotencyKeys(
+    ttlHours: number,
+    batchSize: number = CLEANUP_BATCH_SIZE
+  ): Promise<number> {
     const hours = Math.max(0, Math.floor(ttlHours));
-    const query = `
-      DELETE FROM message_idempotency
-      WHERE created_at < NOW() - INTERVAL '${hours} hours'
-    `;
+    const limit = normaliseBatchSize(batchSize);
+    let total = 0;
 
-    const result = await this.pool.query(query);
-    return result.rowCount || 0;
+    for (;;) {
+      const result = await this.pool.query(
+        `
+        DELETE FROM message_idempotency
+        WHERE (sender_address, idempotency_key) IN (
+          SELECT sender_address, idempotency_key
+          FROM message_idempotency
+          WHERE created_at < NOW() - $1::integer * INTERVAL '1 hour'
+          ORDER BY created_at
+          LIMIT $2
+        )
+        `,
+        [hours, limit]
+      );
+
+      const deleted = result.rowCount || 0;
+      total += deleted;
+
+      // A short batch means there is nothing left that is expired.
+      if (deleted < limit) return total;
+
+      logger.info({ deleted, total }, "Expired idempotency-key cleanup batch deleted");
+      await sleep(CLEANUP_BATCH_PAUSE_MS);
+    }
   }
 
   async getHealthStats(): Promise<{

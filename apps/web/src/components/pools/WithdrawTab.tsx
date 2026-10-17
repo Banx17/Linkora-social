@@ -234,10 +234,10 @@ export function WithdrawTab({ pool, tokenMeta, currentUser, onSuccess }: Withdra
 
           <button
             type="submit"
-            disabled={isSubmitting || !amount || !!amountError || !!recipientError}
+            disabled={isSubmitting || !amount || !!amountError || !!recipientError || needsMoreSigners}
             style={{
               ...styles.submitBtn,
-              ...(isSubmitting || !amount || !!amountError || !!recipientError
+              ...(isSubmitting || !amount || !!amountError || !!recipientError || needsMoreSigners
                 ? styles.submitBtnDisabled
                 : {}),
             }}
@@ -248,7 +248,7 @@ export function WithdrawTab({ pool, tokenMeta, currentUser, onSuccess }: Withdra
                 {status === "awaiting_sig" ? "Sign in Freighter…" : "Withdrawing…"}
               </>
             ) : needsMoreSigners ? (
-              "Initiate Withdrawal Request"
+              `Waiting for ${pool.threshold - signerCount} more signature${pool.threshold - signerCount !== 1 ? "s" : ""}`
             ) : (
               `Withdraw ${amount ? `${amount} ${symbol}` : ""}`
             )}

@@ -7,13 +7,31 @@
  * ever seeing plaintext.  Authentication uses Stellar Ed25519 signatures so
  * the relay can prove the sender is who they claim to be.
  *
- * Auth scheme (mirrors services/dm-relay/auth.ts):
- *   hash      = SHA-256(sender_stellar_address + unix_timestamp_seconds)
- *   signature = Ed25519_sign(freighter_private_key, hash)  — via Freighter signBlob
- *   sent as hex string in the JSON body
+ * Auth scheme (mirrors services/dm-relay/src/auth.ts):
+ *   message      = "v2:" + recipient + ":" + message_index + ":" + timestamp
+ *                  + ":" + sha256_hex(ciphertext_b64)
+ *   hash         = SHA-256(message)
+ *   signature    = Ed25519_sign(freighter_private_key, hash)  — via Freighter
+ *                  signBlob, sent as a hex string in the JSON body
+ *
+ * Key rotation support:
+ *   Before fetching messages the caller should invoke `syncWithRotationCheck`
+ *   (or use `fetchMessagesWithRotationCheck` which wraps it).  When a peer's
+ *   on-chain X25519 key has changed since the last sync, all cached session
+ *   keys are invalidated so conversation keys are re-derived from the new
+ *   key agreement, and the sync cursor is reset so messages encrypted under
+ *   the new key are fetched.
  */
 
 import { bytesToHex, bytesToBase64, base64ToBytes, createConversationId } from "./crypto";
+import { getDmKey } from "./contract";
+import {
+  hasKeyRotated,
+  recordKeyRotation,
+  invalidateAllSessionKeys,
+  storePublishedKey,
+  loadPublishedKey,
+} from "./storage";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -42,14 +60,32 @@ async function sha256Web(data: Uint8Array): Promise<Uint8Array> {
 }
 
 /**
- * Signs SHA-256(sender + timestamp) with the user's Freighter key and
+ * Signs the canonical DM message envelope with the user's Freighter key and
  * returns the 64-byte Ed25519 signature as a hex string.
+ *
+ * Canonical layout (must match `buildDmAuthMessage` in both
+ * `services/dm-relay/src/auth.ts` and `packages/sdk/src/dm/relay.ts`):
+ *
+ *   v2:{recipient}:{message_index}:{timestamp}:{sha256_hex(ciphertext_b64)}
+ *
+ * Committing to the ciphertext digest means an on-path attacker cannot swap
+ * `ciphertext_b64` on a captured signed request.
  *
  * Freighter v2 exposes signBlob(base64Data, opts) which signs raw bytes with
  * the wallet's Ed25519 private key and returns a base64-encoded signature.
  */
-async function buildAuthSignature(senderAddress: string, timestamp: number): Promise<string> {
-  const hash = await sha256Web(new TextEncoder().encode(senderAddress + String(timestamp)));
+async function buildAuthSignature(
+  senderAddress: string,
+  recipient: string,
+  messageIndex: number,
+  timestamp: number,
+  ciphertextB64: string
+): Promise<string> {
+  const ciphertextHash = bytesToHex(
+    await sha256Web(new TextEncoder().encode(ciphertextB64))
+  );
+  const authMessage = `v2:${recipient}:${messageIndex}:${timestamp}:${ciphertextHash}`;
+  const hash = await sha256Web(new TextEncoder().encode(authMessage));
 
   const { signBlob } = await import("@stellar/freighter-api");
   const signBlobFn = signBlob as (
@@ -76,15 +112,27 @@ export async function sendRelayMessage(
   messageIndex: number
 ): Promise<void> {
   const timestamp = Math.floor(Date.now() / 1000);
-  const signature = await buildAuthSignature(senderAddress, timestamp);
+  const ciphertext_b64 = bytesToBase64(ciphertext);
+  const signature = await buildAuthSignature(
+    senderAddress,
+    recipientAddress,
+    messageIndex,
+    timestamp,
+    ciphertext_b64
+  );
 
   const res = await fetch(`${RELAY_URL}/api/messages`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      // The relay requires a per-request idempotency key so client retries
+      // cannot create duplicate inbox entries.
+      "X-Idempotency-Key": crypto.randomUUID(),
+    },
     body: JSON.stringify({
       sender: senderAddress,
       recipient: recipientAddress,
-      ciphertext_b64: bytesToBase64(ciphertext),
+      ciphertext_b64,
       message_index: messageIndex,
       timestamp,
       signature,
@@ -130,14 +178,14 @@ export function connectRelayWs(address: string) {
   if (ws) return;
   const wsUrl = RELAY_URL.replace(/^http/, "ws") + `/ws?address=${address}`;
   ws = new WebSocket(wsUrl);
-  
+
   ws.onmessage = (event) => {
     try {
       const payload = JSON.parse(event.data);
       messageListeners.forEach((listener) => listener(payload));
     } catch (e) {}
   };
-  
+
   ws.onclose = () => {
     ws = null;
   };
@@ -152,10 +200,59 @@ export function onRelayMessage(listener: (payload: any) => void) {
 
 export function sendTypingStatus(recipient: string) {
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({
-      type: "typing_status",
-      recipient
-    }));
+    ws.send(
+      JSON.stringify({
+        type: "typing_status",
+        recipient,
+      })
+    );
   }
 }
 
+// ── Key rotation detection & re-sync ─────────────────────────────────────────
+
+/**
+ * Check whether `peerAddress` has rotated their on-chain DM key since we
+ * last synced.  If a rotation is detected, every cached session key for
+ * `myAddress` is invalidated and the sync cursor is reset so the next
+ * message fetch re-downloads ciphertexts encrypted under the new key.
+ *
+ * @returns `true` if a rotation was detected and caches were cleared.
+ */
+export async function checkPeerKeyRotation(
+  myAddress: string,
+  peerAddress: string
+): Promise<boolean> {
+  const onChainKey = await getDmKey(peerAddress);
+  if (!onChainKey) return false;
+
+  if (hasKeyRotated(peerAddress, onChainKey)) {
+    invalidateAllSessionKeys(myAddress);
+    recordKeyRotation(peerAddress, onChainKey);
+    return true;
+  }
+
+  // First time we see this peer – record the key so future rotations
+  // can be detected.
+  if (!loadPublishedKey(peerAddress)) {
+    storePublishedKey(peerAddress, onChainKey);
+  }
+
+  return false;
+}
+
+/**
+ * Higher-level wrapper that checks for a peer key rotation, then fetches
+ * relay messages for the conversation.
+ *
+ * Use this instead of a raw `fetchRelayMessages` call so that cached
+ * session keys are always kept in sync with the on-chain key state.
+ */
+export async function fetchMessagesWithRotationCheck(
+  myAddress: string,
+  theirAddress: string,
+  limit = 50
+): Promise<RelayMessage[]> {
+  await checkPeerKeyRotation(myAddress, theirAddress);
+  return fetchRelayMessages(myAddress, theirAddress, limit);
+}

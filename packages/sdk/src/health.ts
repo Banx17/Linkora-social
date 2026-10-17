@@ -1,8 +1,17 @@
 import * as rpc from "@stellar/stellar-sdk/rpc";
-import type { RetryAttemptInfo, RetryReason } from "./utils/retry";
+import type { RetryAttemptInfo, RetryReason } from "./utils/retry.js";
+import { TimeoutError } from "./errors.js";
 
 export type ConnectionStatus = "connected" | "disconnected";
 export type ConnectionStatusCallback = (status: ConnectionStatus) => void;
+
+export interface RpcHealthResult {
+  healthy: boolean;
+  expectedNetworkPassphrase: string;
+  networkPassphrase?: string;
+  latestLedgerSequence?: number;
+  error?: string;
+}
 
 /**
  * Aggregate retry telemetry recorded from a {@link TransactionQueue}'s retry loop.
@@ -41,6 +50,8 @@ export interface HealthCheckConfig {
   backoffMs?: number;
   /** Maximum backoff cap in ms. Default: 30000 */
   maxBackoffMs?: number;
+  /** Timeout in ms for individual health check pings. Default: 10000 */
+  pingTimeoutMs?: number;
 }
 
 /**
@@ -52,41 +63,122 @@ export class ConnectionHealthMonitor {
   private readonly intervalMs: number;
   private readonly backoffMs: number;
   private readonly maxBackoffMs: number;
+  private readonly pingTimeoutMs: number;
+  private readonly expectedNetworkPassphrase: string;
+  private readonly server: rpc.Server;
 
   private status: ConnectionStatus = "disconnected";
   private listeners: ConnectionStatusCallback[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
+  private hasChecked = false;
   private retryMetrics: RetryMetrics = emptyRetryMetrics();
+  private readonly _server?: rpc.Server;
 
-  constructor(rpcUrl: string, config: HealthCheckConfig = {}) {
+  private boundResume = () => this.resume();
+
+  constructor(
+    rpcUrl: string,
+    config: HealthCheckConfig = {},
+    server?: rpc.Server,
+    expectedNetworkPassphrase = "Test SDF Network ; September 2015"
+  ) {
     this.rpcUrl = rpcUrl;
     this.intervalMs = config.intervalMs ?? 30_000;
     this.backoffMs = config.backoffMs ?? 1_000;
     this.maxBackoffMs = config.maxBackoffMs ?? 30_000;
+    this.pingTimeoutMs = config.pingTimeoutMs ?? 10_000;
+    this.expectedNetworkPassphrase = expectedNetworkPassphrase;
+    this.server = server ?? new rpc.Server(this.rpcUrl, { allowHttp: false });
+
+    if (typeof window !== "undefined") {
+      window.addEventListener("online", this.boundResume);
+      document.addEventListener("visibilitychange", this.boundResume);
+    }
   }
 
-  /** Register a callback invoked whenever connection status changes. Starts the loop if not already running. */
-  onConnectionStatusChange(callback: ConnectionStatusCallback): void {
-    this.listeners.push(callback);
+  /**
+   * Register a callback invoked whenever connection status changes. Starts the loop if not
+   * already running. Re-registering the same callback reference is a no-op (it will not be
+   * invoked twice per status change), so it is safe to call this repeatedly with a stable
+   * callback — e.g. from a React effect that re-runs on every render.
+   *
+   * @returns An unsubscribe function that removes this listener.
+   */
+  onConnectionStatusChange(callback: ConnectionStatusCallback): () => void {
+    if (!this.listeners.includes(callback)) {
+      this.listeners.push(callback);
+    }
     this.start();
+    return () => {
+      this.listeners = this.listeners.filter((cb) => cb !== callback);
+    };
   }
 
   /** Perform a single health check ping against the RPC endpoint. */
   async healthCheck(): Promise<boolean> {
+    return (await this.getHealthResult()).healthy;
+  }
+
+  /** Check RPC reachability, network identity, and the latest ledger response. */
+  async getHealthResult(): Promise<RpcHealthResult> {
     try {
-      const server = new rpc.Server(this.rpcUrl);
-      await server.getLatestLedger();
-      return true;
-    } catch {
-      return false;
+      const network = await withTimeout(
+        this.server.getNetwork(),
+        this.pingTimeoutMs,
+        `Network identity check timed out after ${this.pingTimeoutMs}ms`
+      );
+      if (network.passphrase !== this.expectedNetworkPassphrase) {
+        return {
+          healthy: false,
+          expectedNetworkPassphrase: this.expectedNetworkPassphrase,
+          networkPassphrase: network.passphrase,
+          error: "RPC network passphrase does not match the configured network.",
+        };
+      }
+      const ledger = await withTimeout(
+        this.server.getLatestLedger(),
+        this.pingTimeoutMs,
+        `Health check timed out after ${this.pingTimeoutMs}ms`
+      );
+      if (!Number.isSafeInteger(ledger.sequence) || ledger.sequence <= 0) {
+        return {
+          healthy: false,
+          expectedNetworkPassphrase: this.expectedNetworkPassphrase,
+          networkPassphrase: network.passphrase,
+          error: "RPC returned an invalid latest ledger sequence.",
+        };
+      }
+      return {
+        healthy: true,
+        expectedNetworkPassphrase: this.expectedNetworkPassphrase,
+        networkPassphrase: network.passphrase,
+        latestLedgerSequence: ledger.sequence,
+      };
+    } catch (error) {
+      return {
+        healthy: false,
+        expectedNetworkPassphrase: this.expectedNetworkPassphrase,
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
+  }
+
+  /** Alias for start(). Useful for resuming after a sustained outage stops polling. */
+  resume(): void {
+    this.start();
+  }
+
+  /** Alias for start(). */
+  wake(): void {
+    this.start();
   }
 
   /** Start periodic health checks. Idempotent — safe to call multiple times. */
   start(): void {
     if (this.timer !== null) return; // already running
     this.stopped = false;
+    this.hasChecked = false;
     this.scheduleCheck(0);
   }
 
@@ -99,8 +191,26 @@ export class ConnectionHealthMonitor {
     }
   }
 
+  /** Destroy the monitor, stop all checks, clear listeners, and reset state. */
+  destroy(): void {
+    this.stop();
+    if (typeof window !== "undefined") {
+      window.removeEventListener("online", this.boundResume);
+      document.removeEventListener("visibilitychange", this.boundResume);
+    }
+    this.listeners = [];
+    this.status = "disconnected";
+    this.hasChecked = false;
+    this.retryMetrics = emptyRetryMetrics();
+    this._currentBackoff = 0;
+  }
+
   private scheduleCheck(delayMs: number): void {
-    this.timer = setTimeout(() => this.runCheck(), delayMs);
+    const baseJitter =
+      delayMs === 0
+        ? Math.random() * Math.min(this.intervalMs, 100)
+        : delayMs * 0.2 * Math.random();
+    this.timer = setTimeout(() => this.runCheck(), delayMs + baseJitter);
   }
 
   private async runCheck(): Promise<void> {
@@ -109,13 +219,21 @@ export class ConnectionHealthMonitor {
     const ok = await this.healthCheck();
     const next: ConnectionStatus = ok ? "connected" : "disconnected";
 
-    if (next !== this.status) {
+    // Always emit the result of the first check so callers observe the
+    // initial connection state even when the RPC is unreachable from the start.
+    if (!this.hasChecked || next !== this.status) {
       this.status = next;
       for (const cb of this.listeners) cb(this.status);
     }
+    this.hasChecked = true;
 
     if (!this.stopped) {
-      this.scheduleCheck(ok ? this.intervalMs : this.nextBackoff());
+      if (!ok && this._currentBackoff >= this.maxBackoffMs) {
+        // Sustained outage reached max backoff cap. Stop probing until manual restart or network recovery event.
+        this.stop();
+      } else {
+        this.scheduleCheck(ok ? this.intervalMs : this.nextBackoff());
+      }
     }
   }
 
@@ -175,4 +293,20 @@ export class ConnectionHealthMonitor {
     }
     return this._currentBackoff;
   }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new TimeoutError(message, { timeoutMs: ms })), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
 }

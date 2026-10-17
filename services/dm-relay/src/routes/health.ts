@@ -1,17 +1,34 @@
 /**
  * Kubernetes-ready health endpoints: liveness, readiness, and startup probes.
  *
- * - /health/live    always 200 while the process is running
+ * - /health          aggregate status, including degraded modes
+ * - /health/live     always 200 while the process is running
  * - /health/ready    200 when the database is reachable and the relay isn't shutting down
  * - /health/startup  200 once initial bootstrap (DB init) has completed
+ *
+ * `rateLimiter` reports which store backs the HTTP and WebSocket limiters.
+ * `shared: false` means limits are enforced per replica, so a scaled
+ * deployment's effective limit is `limit × replicaCount`. That marks the
+ * service degraded on /health but does not fail readiness — a single-replica
+ * deployment is still correct, and pulling the pod from the load balancer
+ * would turn a weak limit into an outage.
  */
 
 import { Router } from "express";
+import type { RateLimitStoreStatus } from "@linkora/types/src/rate-limit-env";
 import { Database } from "../database";
+import { getRateLimitStoreStatus } from "../middleware/rateLimit";
 
 interface DependencyCheck {
   status: "up" | "down";
   latencyMs: number;
+}
+
+interface PoolCheck {
+  status: "healthy" | "unhealthy";
+  totalCount: number;
+  idleCount: number;
+  waitingCount: number;
 }
 
 export interface HealthState {
@@ -20,6 +37,8 @@ export interface HealthState {
   isStarted: () => boolean;
   startedAt: () => string | null;
   isShuttingDown: () => boolean;
+  /** Injectable for tests; defaults to the module-level limiter singleton. */
+  rateLimitStatus?: () => RateLimitStoreStatus;
 }
 
 async function checkDatabase(db: Database): Promise<DependencyCheck> {
@@ -32,8 +51,42 @@ async function checkDatabase(db: Database): Promise<DependencyCheck> {
   }
 }
 
+/** Pool utilisation and a proactive health probe, distinct from `checkDatabase`
+ *  (issue #888): the pool can be saturated or degraded before a single ping fails. */
+async function checkPool(db: Database): Promise<PoolCheck> {
+  const health = await db.getPoolHealth();
+  return { status: health.status, ...health.metrics };
+}
+
 export function createHealthRouter(state: HealthState): Router {
   const router = Router();
+  const rateLimitStatus = state.rateLimitStatus ?? getRateLimitStoreStatus;
+
+  router.get("/health", async (_req, res) => {
+    const uptime = Math.floor((Date.now() - state.startTime) / 1000);
+    const rateLimiter = rateLimitStatus();
+
+    if (state.isShuttingDown()) {
+      res.status(503).json({
+        status: "degraded",
+        uptime,
+        rateLimiter,
+        checks: { database: { status: "down", latencyMs: 0 } },
+      });
+      return;
+    }
+
+    const [database, pool] = await Promise.all([checkDatabase(state.db), checkPool(state.db)]);
+    const healthy = database.status === "up" && pool.status === "healthy";
+    const status = healthy ? (rateLimiter.shared ? "ok" : "degraded") : "degraded";
+
+    res.status(healthy ? 200 : 503).json({
+      status,
+      uptime,
+      rateLimiter,
+      checks: { database, pool },
+    });
+  });
 
   router.get("/health/live", (_req, res) => {
     const uptime = Math.floor((Date.now() - state.startTime) / 1000);
@@ -41,10 +94,14 @@ export function createHealthRouter(state: HealthState): Router {
   });
 
   router.get("/health/ready", async (_req, res) => {
+    const rateLimiter = rateLimitStatus();
+
     if (state.isShuttingDown()) {
-      res
-        .status(503)
-        .json({ status: "not_ready", checks: { database: { status: "down", latencyMs: 0 } } });
+      res.status(503).json({
+        status: "not_ready",
+        degraded: !rateLimiter.shared,
+        checks: { database: { status: "down", latencyMs: 0 }, rateLimiter },
+      });
       return;
     }
 
@@ -52,7 +109,8 @@ export function createHealthRouter(state: HealthState): Router {
     const ready = database.status === "up";
     res.status(ready ? 200 : 503).json({
       status: ready ? "ready" : "not_ready",
-      checks: { database },
+      degraded: !rateLimiter.shared,
+      checks: { database, rateLimiter },
     });
   });
 

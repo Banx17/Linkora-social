@@ -1,10 +1,216 @@
 #![cfg(test)]
+extern crate std;
 
-use crate::*;
-use soroban_sdk::{
-    testutils::{Address as _, Ledger},
-    vec, Address, BytesN, Env, String,
+use crate::test::{
+    credential_authority_pubkey, credential_authority_signing_key, sign_credential_root,
 };
+use crate::*;
+use soroban_sdk::{testutils::Address as _, vec, Address, BytesN, Env, String, Vec};
+
+/// Credential subsystem invariant tests
+/// These tests verify that the credential subsystem maintains
+/// important security and correctness invariants.
+
+#[test]
+fn test_invariant_credential_root_persistence() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup_test_env(&env);
+    let signing_key = credential_authority_signing_key(1);
+    client.set_credential_authority(&admin, &credential_authority_pubkey(&env, &signing_key));
+
+    let user = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let root = BytesN::from_array(&env, &[1u8; 32]);
+
+    client.update_credential_root(
+        &user,
+        &root,
+        &sign_credential_root(&env, &signing_key, &root),
+    );
+
+    // Invariant: Once set, the root should persist across multiple reads
+    assert_eq!(client.get_credential_root(&user).unwrap(), root);
+    assert_eq!(client.get_credential_root(&user).unwrap(), root);
+    assert_eq!(client.get_credential_root(&user).unwrap(), root);
+}
+
+#[test]
+fn test_invariant_nullifier_uniqueness() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup_test_env(&env);
+    let signing_key = credential_authority_signing_key(1);
+    client.set_credential_authority(&admin, &credential_authority_pubkey(&env, &signing_key));
+
+    let user = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let leaf = BytesN::from_array(&env, &[1u8; 32]);
+    let root = leaf.clone();
+    let proof: Vec<BytesN<32>> = vec![&env];
+
+    client.update_credential_root(
+        &user,
+        &root,
+        &sign_credential_root(&env, &signing_key, &root),
+    );
+
+    // Invariant: Each nullifier can only be used once
+    let nullifier1 = BytesN::from_array(&env, &[10u8; 32]);
+    let nullifier2 = BytesN::from_array(&env, &[20u8; 32]);
+    let nullifier3 = BytesN::from_array(&env, &[30u8; 32]);
+
+    assert!(client.verify_credential(&user, &proof, &leaf, &nullifier1));
+    assert!(client.verify_credential(&user, &proof, &leaf, &nullifier2));
+    assert!(client.verify_credential(&user, &proof, &leaf, &nullifier3));
+
+    // Reusing any nullifier returns false rather than panicking.
+    let reused = client.verify_credential(&user, &proof, &leaf, &nullifier1);
+    assert!(!reused, "reused nullifier should return false");
+}
+
+#[test]
+fn test_invariant_nullifier_replay_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup_test_env(&env);
+    let signing_key = credential_authority_signing_key(1);
+    client.set_credential_authority(&admin, &credential_authority_pubkey(&env, &signing_key));
+
+    let user = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let leaf = BytesN::from_array(&env, &[1u8; 32]);
+    let root = leaf.clone();
+    let proof: Vec<BytesN<32>> = vec![&env];
+    let nullifier = BytesN::from_array(&env, &[10u8; 32]);
+
+    client.update_credential_root(
+        &user,
+        &root,
+        &sign_credential_root(&env, &signing_key, &root),
+    );
+
+    // First verification should succeed
+    assert!(client.verify_credential(&user, &proof, &leaf, &nullifier));
+
+    // Second verification with the same nullifier returns false rather than panicking.
+    let replayed = client.verify_credential(&user, &proof, &leaf, &nullifier);
+    assert!(!replayed, "replayed nullifier should return false");
+}
+
+#[test]
+fn test_invariant_user_root_isolation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup_test_env(&env);
+    let signing_key = credential_authority_signing_key(1);
+    client.set_credential_authority(&admin, &credential_authority_pubkey(&env, &signing_key));
+
+    let user1 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let user2 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let user3 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    let root1 = BytesN::from_array(&env, &[1u8; 32]);
+    let root2 = BytesN::from_array(&env, &[2u8; 32]);
+    let root3 = BytesN::from_array(&env, &[3u8; 32]);
+
+    client.update_credential_root(
+        &user1,
+        &root1,
+        &sign_credential_root(&env, &signing_key, &root1),
+    );
+    client.update_credential_root(
+        &user2,
+        &root2,
+        &sign_credential_root(&env, &signing_key, &root2),
+    );
+    client.update_credential_root(
+        &user3,
+        &root3,
+        &sign_credential_root(&env, &signing_key, &root3),
+    );
+
+    // Invariant: Each user's root is independent
+    assert_eq!(client.get_credential_root(&user1).unwrap(), root1);
+    assert_eq!(client.get_credential_root(&user2).unwrap(), root2);
+    assert_eq!(client.get_credential_root(&user3).unwrap(), root3);
+
+    // Updating one user should not affect others
+    let new_root1 = BytesN::from_array(&env, &[99u8; 32]);
+    client.update_credential_root(
+        &user1,
+        &new_root1,
+        &sign_credential_root(&env, &signing_key, &new_root1),
+    );
+
+    assert_eq!(client.get_credential_root(&user1).unwrap(), new_root1);
+    assert_eq!(client.get_credential_root(&user2).unwrap(), root2);
+    assert_eq!(client.get_credential_root(&user3).unwrap(), root3);
+}
+
+#[test]
+fn test_invariant_verification_requires_root() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_test_env(&env);
+
+    let user = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let leaf = BytesN::from_array(&env, &[1u8; 32]);
+    let proof: Vec<BytesN<32>> = vec![&env];
+    let nullifier = BytesN::from_array(&env, &[10u8; 32]);
+
+    // Invariant: Verification must return false without a root set
+    let result = client.verify_credential(&user, &proof, &leaf, &nullifier);
+    assert!(!result, "verification without a root should return false");
+}
+
+#[test]
+fn test_invariant_invalid_proof_does_not_consume_nullifier() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup_test_env(&env);
+    let signing_key = credential_authority_signing_key(1);
+    client.set_credential_authority(&admin, &credential_authority_pubkey(&env, &signing_key));
+
+    let user = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let root = BytesN::from_array(&env, &[1u8; 32]);
+    let wrong_leaf = BytesN::from_array(&env, &[2u8; 32]);
+    let proof: Vec<BytesN<32>> = vec![&env];
+    let nullifier = BytesN::from_array(&env, &[10u8; 32]);
+
+    client.update_credential_root(
+        &user,
+        &root,
+        &sign_credential_root(&env, &signing_key, &root),
+    );
+
+    // Invariant: Failed verification should not consume the nullifier
+    assert!(!client.verify_credential(&user, &proof, &wrong_leaf, &nullifier));
+
+    // Same nullifier should still work for a valid proof
+    let valid_leaf = root.clone();
+    assert!(client.verify_credential(&user, &proof, &valid_leaf, &nullifier));
+}
+
+#[test]
+fn test_invariant_root_size_fixed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup_test_env(&env);
+    let signing_key = credential_authority_signing_key(1);
+    client.set_credential_authority(&admin, &credential_authority_pubkey(&env, &signing_key));
+
+    let user = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    // Invariant: Root must be exactly 32 bytes
+    // This is enforced by the type system (BytesN<32>)
+    let root = BytesN::from_array(&env, &[1u8; 32]);
+    client.update_credential_root(
+        &user,
+        &root,
+        &sign_credential_root(&env, &signing_key, &root),
+    );
+
+    let retrieved = client.get_credential_root(&user).unwrap();
+    assert_eq!(retrieved.to_array().len(), 32);
+}
 
 // ── Issue #879: Deletion cleanup invariants ──────────────────────────────────
 //
@@ -68,7 +274,7 @@ fn invariant_no_orphaned_likes_after_post_deletion_with_multiple_likers() {
 fn invariant_no_orphaned_reports_after_post_deletion() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, admin, _) = setup_test_env(&env);
+    let (client, _admin, _) = setup_test_env(&env);
 
     let author = Address::generate(&env);
     setup_profile(&client, &author, "author");
@@ -153,6 +359,128 @@ fn invariant_no_orphaned_authored_posts_after_profile_deletion() {
     // Invariant: Authored posts are tombstoned and no longer retrievable
     assert!(client.get_post(&post_id1).is_none());
     assert!(client.get_post(&post_id2).is_none());
+}
+
+// ── Issue #1249: pool existence invariant ───────────────────────────────────
+//
+// These invariants verify that get_pool and get_pool_admins always
+// distinguish between a pool that was never created and one that exists
+// with zero admins.
+
+#[test]
+fn invariant_get_pool_admins_none_for_missing_pool() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_test_env(&env);
+
+    // Invariant: get_pool_admins must return None for a pool_id
+    // that was never created — not an empty Vec.
+    let missing_id = soroban_sdk::symbol_short!("never");
+    assert_eq!(
+        client.get_pool_admins(&missing_id),
+        None,
+        "get_pool_admins must return None for a non-existent pool"
+    );
+    // Also verify get_pool returns None for the same missing id.
+    assert!(
+        client.get_pool(&missing_id).is_none(),
+        "get_pool must return None for a non-existent pool"
+    );
+}
+
+#[test]
+fn invariant_existing_pool_admins_are_some() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup_test_env(&env);
+
+    let pool_admin = Address::generate(&env);
+    let token = setup_token_in_env(&env, &pool_admin);
+
+    let pool_id = soroban_sdk::symbol_short!("inv12");
+    client.create_pool(
+        &admin,
+        &pool_id,
+        &token,
+        &vec![&env, pool_admin.clone()],
+        &1,
+    );
+
+    // Invariant: After creation, get_pool returns Some and
+    // get_pool_admins returns Some with the correct admin list.
+    assert!(client.get_pool(&pool_id).is_some());
+    let admins = client.get_pool_admins(&pool_id).unwrap();
+    assert_eq!(admins.len(), 1);
+    assert!(admins.iter().any(|a| a == pool_admin));
+}
+
+#[test]
+fn invariant_pool_threshold_cannot_exceed_admin_count() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup_test_env(&env);
+
+    let pool_admin1 = Address::generate(&env);
+    let pool_admin2 = Address::generate(&env);
+    let token = setup_token_in_env(&env, &pool_admin1);
+
+    let pool_id = soroban_sdk::symbol_short!("inv_th");
+
+    // Invariant: Pool creation fails if threshold > initial admins count
+    let bad_create = client.try_create_pool(
+        &admin,
+        &pool_id,
+        &token,
+        &vec![&env, pool_admin1.clone(), pool_admin2.clone()],
+        &3,
+    );
+    assert!(
+        bad_create.is_err(),
+        "create_pool with threshold > admins must fail"
+    );
+
+    // Create a valid 2-of-2 pool
+    client.create_pool(
+        &admin,
+        &pool_id,
+        &token,
+        &vec![&env, pool_admin1.clone(), pool_admin2.clone()],
+        &2,
+    );
+
+    // Invariant: Pool threshold <= admin count after valid creation
+    let pool = client.get_pool(&pool_id).unwrap();
+    assert!(pool.threshold <= pool.admins.len());
+
+    // Invariant: update_pool_threshold fails if new threshold > admins count
+    let bad_update = client.try_update_pool_threshold(
+        &vec![&env, pool_admin1.clone(), pool_admin2.clone()],
+        &pool_id,
+        &3,
+    );
+    assert!(
+        bad_update.is_err(),
+        "update_pool_threshold with threshold > admins must fail"
+    );
+
+    // Invariant: threshold remains <= admin count after rejected update
+    let pool_after = client.get_pool(&pool_id).unwrap();
+    assert!(pool_after.threshold <= pool_after.admins.len());
+
+    // Invariant: remove_pool_admin fails if removal would cause admins count < threshold
+    let bad_remove = client.try_remove_pool_admin(
+        &vec![&env, pool_admin1.clone(), pool_admin2.clone()],
+        &pool_id,
+        &pool_admin2,
+    );
+    assert!(
+        bad_remove.is_err(),
+        "remove_pool_admin causing admins < threshold must fail"
+    );
+
+    // Invariant: threshold remains <= admin count after rejected admin removal
+    let pool_final = client.get_pool(&pool_id).unwrap();
+    assert!(pool_final.threshold <= pool_final.admins.len());
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

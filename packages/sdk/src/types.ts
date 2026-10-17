@@ -6,9 +6,14 @@
  */
 
 // Re-export all generated contract types (Profile, Post, Pool, GovParameter, etc.)
-export * from "./generated/types";
+export * from "./generated/types.js";
 
-/** Analytics attestation returned by the oracle service REST API. */
+/**
+ * Analytics attestation returned by the oracle service REST API.
+ *
+ * @deprecated This interface is not referenced anywhere in the codebase and
+ *   may be removed in a future major release.
+ */
 export interface AnalyticsAttestation {
   oracleName: string;
   reportHash: string;
@@ -43,6 +48,12 @@ export interface SimulationResult {
   success: boolean;
   resourceFee: string;
   footprint?: LedgerFootprint;
+  /**
+   * Base-64 XDR of the soroban transaction data the assembled submit
+   * artifact carries (issue #1356). The submit path reuses this data
+   * identically, so a caller can assert dry-run/submit parity from it.
+   */
+  sorobanData?: string;
   error?: string;
   eventLog?: unknown;
 }

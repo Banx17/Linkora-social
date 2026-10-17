@@ -1,9 +1,11 @@
 import express, { Request, Response, NextFunction } from "express";
+import helmet from "helmet";
 import { Pool as PgPool } from "pg";
 import { Database } from "../db";
 import { logger, requestLoggingMiddleware } from "../logger";
-import { rateLimit, rateLimitWrite } from "../middleware/rateLimit";
-import { requireStellarAuth } from "../middleware/stellarAuth";
+import { rateLimit, rateLimitWrite, getRateLimitStoreStatus } from "../middleware/rateLimit";
+import { requireStellarAuth, optionalStellarAuth } from "../middleware/stellarAuth";
+import { jsonWithRawBody } from "../middleware/rawBody";
 import { validateBody } from "../middleware/validate";
 import { z } from "zod";
 import { createProfilesRouter } from "./routes/profiles";
@@ -15,6 +17,8 @@ import { createNotificationsRouter } from "./routes/notifications";
 import { createGovernanceRouter } from "./routes/governance";
 import { createUsersRouter } from "./routes/users";
 import { createFeedRouter } from "./routes/feed";
+import { createSearchRouter } from "./routes/search";
+import { MediaUploadConfig } from "../config";
 import { isFenced } from "../gossip";
 import { getBackfillState } from "../stream";
 import {
@@ -24,23 +28,47 @@ import {
 } from "../notifications/service";
 import { PostgresDatabase } from "../postgres-db";
 import { HealthMonitor } from "../services/health-monitor";
+import { metricsText } from "../metrics";
+import { attachPoolMonitoring } from "../db-pool-monitor";
+
+let warnedMissingAllowedOrigins = false;
 
 function corsMiddleware(req: Request, res: Response, next: NextFunction): void {
-  const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "*")
+  const configuredOrigins = (process.env.ALLOWED_ORIGINS ?? "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
 
+  const isProduction = process.env.NODE_ENV === "production";
+  let allowedOrigins = configuredOrigins;
+  if (allowedOrigins.length === 0) {
+    if (isProduction) {
+      if (!warnedMissingAllowedOrigins) {
+        logger.warn(
+          "No ALLOWED_ORIGINS set in production — CORS will reject all cross-origin requests"
+        );
+        warnedMissingAllowedOrigins = true;
+      }
+    } else {
+      // Permissive default for local development only.
+      allowedOrigins = ["*"];
+    }
+  }
+
+  const allowAll = allowedOrigins.includes("*");
   const origin = req.headers.origin;
-  if (origin) {
-    if (allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
-      res.setHeader("Access-Control-Allow-Origin", origin);
+  if (origin && (allowAll || allowedOrigins.includes(origin))) {
+    // Never echo the caller's Origin under a wildcard policy — that would
+    // grant every site credentialed access. Only a specifically allow-listed
+    // origin may receive Allow-Credentials.
+    res.setHeader("Access-Control-Allow-Origin", allowAll ? "*" : origin);
+    if (!allowAll) {
+      res.setHeader("Access-Control-Allow-Credentials", "true");
     }
   }
 
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  res.setHeader("Access-Control-Allow-Credentials", "true");
 
   if (req.method === "OPTIONS") {
     res.sendStatus(204);
@@ -55,12 +83,25 @@ function corsMiddleware(req: Request, res: Response, next: NextFunction): void {
 export function createApp(
   db: Database,
   pg?: PgPool,
-  healthMonitor?: HealthMonitor
+  healthMonitor?: HealthMonitor,
+  shutdownState?: { active: boolean },
+  mediaUpload?: MediaUploadConfig
 ): express.Application {
   const app = express();
-  app.use(express.json());
+  app.use(helmet());
+  app.set("trust proxy", 1); // trust first proxy
+  app.use(jsonWithRawBody());
   app.use(corsMiddleware);
   app.use(requestLoggingMiddleware);
+
+  // Reject new requests with 503 once graceful shutdown has begun.
+  app.use((_req: Request, res: Response, next: NextFunction): void => {
+    if (shutdownState?.active) {
+      res.status(503).json({ error: "Service shutting down", code: "SHUTTING_DOWN" });
+      return;
+    }
+    next();
+  });
 
   const startTime = Date.now();
   const version = process.env.npm_package_version ?? "0.1.0";
@@ -68,19 +109,32 @@ export function createApp(
   const monitor =
     healthMonitor ?? (pg ? new HealthMonitor(pg, process.env.STELLAR_RPC_URL ?? "") : undefined);
 
+  app.get("/metrics", (_req: Request, res: Response): void => {
+    res.type("text/plain").send(metricsText());
+  });
+
   app.get("/health", async (_req: Request, res: Response): Promise<void> => {
     const uptime = Math.floor((Date.now() - startTime) / 1000);
     const backfill = getBackfillState();
     const readiness = monitor
       ? await monitor.checkReadiness()
-      : { ready: false, checks: undefined };
+      : { ready: false, degraded: true, checks: undefined };
+    // Read through the monitor so the top-level field and `checks.rateLimiter`
+    // can never disagree; fall back to the singleton when there is no monitor.
+    const rateLimiter = readiness.checks?.rateLimiter ?? getRateLimitStoreStatus();
+
+    // A per-instance rate limiter is a degradation, not an outage: the pod can
+    // still serve traffic, so it keeps returning 200 and stays in the load
+    // balancer while flagging that limits are not shared across replicas.
+    const status = readiness.ready ? (readiness.degraded ? "degraded" : "ok") : "degraded";
 
     res.status(readiness.ready ? 200 : 503).json({
-      status: readiness.ready ? "ok" : "degraded",
+      status,
       uptime,
       version,
       commit,
       checks: readiness.checks,
+      rateLimiter,
       backfill: backfill.active
         ? { active: true, fromLedger: backfill.fromLedger, toLedger: backfill.toLedger }
         : { active: false },
@@ -102,6 +156,7 @@ export function createApp(
     const readiness = await monitor.checkReadiness();
     res.status(readiness.ready ? 200 : 503).json({
       status: readiness.ready ? "ready" : "not_ready",
+      degraded: readiness.degraded,
       checks: readiness.checks,
     });
   });
@@ -115,9 +170,22 @@ export function createApp(
     }
   });
 
+  // ── Auth + rate limiting ──────────────────────────────────────────────────
+  //
+  // Issue #1325: the rate-limit middleware selects the per-address bucket only
+  // when `req.context.stellarAddress` is already populated. The old ordering
+  // was `rateLimit` → per-route `requireStellarAuth`, so the address was never
+  // set when the read rate-limiter ran; authenticated reads always fell through
+  // to the lower anon IP-keyed bucket.
+  //
+  // Fix: run `optionalStellarAuth` first for every /api request. It sets
+  // `req.context.stellarAddress` for callers who include a valid StellarSig
+  // header without rejecting unauthenticated requests. The rate-limiter that
+  // follows can then correctly choose the per-address or per-IP bucket.
+  app.use("/api", optionalStellarAuth);
   app.use("/api", rateLimit);
 
-  app.use("/api", (_req: Request, res: Response, next: NextFunction): void => {
+  app.use("/api", (req: Request, res: Response, next: NextFunction): void => {
     if (isFenced()) {
       res.status(503).json({
         error: {
@@ -131,16 +199,18 @@ export function createApp(
     next();
   });
 
+  // Every route mounted here must be documented in `openapi.yaml`.
+  // `src/api/__tests__/openapi.test.ts` walks this router stack and fails CI
+  // when a mounted route is undocumented or a documented route is stale, so a
+  // new endpoint cannot ship without a contract.
   app.use("/api/profiles", createProfilesRouter(db));
-  app.use("/api/posts", createPostsRouter(db));
+  app.use("/api/posts", createPostsRouter(db, mediaUpload));
+  app.use("/api/search", createSearchRouter(db));
   app.use("/api/follows", createFollowsRouter(db));
   app.use("/api/pools", createPoolsRouter(db));
   app.use("/api/governance", createGovernanceRouter(db));
   app.use("/api/users", createUsersRouter(db));
-
-  if (pg) {
-    app.use("/api/feed", createFeedRouter(pg));
-  }
+  app.use("/api/feed", createFeedRouter(pg ?? db));
 
   const notificationService = pg
     ? new NotificationService({ deviceTokenStore: new PostgresDeviceTokenStore(pg) })
@@ -183,7 +253,9 @@ export function createApp(
       "Unhandled error"
     );
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     if (typeof (err as any).statusCode === "number") {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const appErr = err as any;
       res.status(appErr.statusCode).json({
         error: {
@@ -213,10 +285,26 @@ if (require.main === module) {
   const { Pool } = require("pg") as typeof import("pg");
   const DATABASE_URL = process.env.DATABASE_URL ?? "";
   const _stub = new Pool({ connectionString: DATABASE_URL }) as unknown as Database;
-  const PORT = parseInt(process.env.PORT ?? "3001", 10);
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { loadConfig } = require("../config");
+  const config = loadConfig();
+  const PORT = config.port;
   const databaseUrl = process.env.DATABASE_URL;
-  const pg = databaseUrl ? new PgPool({ connectionString: databaseUrl }) : undefined;
-  const apiApp = pg ? createApp(new PostgresDatabase(pg), pg) : createApp(_stub);
+  // Same pool settings and monitoring as the main indexer process (issue
+  // #888): this API process holds its own pool, so it needs its own
+  // 'error' listener and configured limits, not just the ingestion pool's.
+  const pg = databaseUrl
+    ? new PgPool({
+        connectionString: databaseUrl,
+        max: config.dbPool.max,
+        idleTimeoutMillis: config.dbPool.idleTimeoutMs,
+        connectionTimeoutMillis: config.dbPool.connectionTimeoutMs,
+      })
+    : undefined;
+  if (pg) attachPoolMonitoring(pg, { logger, serviceName: "indexer-api" });
+  const apiApp = pg
+    ? createApp(new PostgresDatabase(pg), pg, undefined, undefined, loadConfig().mediaUpload)
+    : createApp(_stub);
 
   apiApp.listen(PORT, () => {
     console.log(`Indexer API listening on port ${PORT}`);

@@ -221,14 +221,25 @@ export function RichTextComposer({
     [pollOptions.length]
   );
 
-  // Format content with highlights
+  // Escape HTML metacharacters so user-typed text can never be interpreted as
+  // markup when injected via dangerouslySetInnerHTML.
+  const escapeHtml = useCallback((raw: string) =>
+    raw
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#x27;"),
+  []);
+
+  // Format content with highlights — text is escaped first so that mention
+  // and hashtag spans are the only markup ever injected.
   const formatContent = useCallback((text: string) => {
-    // Highlight mentions
-    let formatted = text.replace(/@(\w+)/g, '<span class="mention-highlight">@$1</span>');
-    // Highlight hashtags
+    const escaped = escapeHtml(text);
+    let formatted = escaped.replace(/@(\w+)/g, '<span class="mention-highlight">@$1</span>');
     formatted = formatted.replace(/#(\w+)/g, '<span class="hashtag-highlight">#$1</span>');
     return formatted;
-  }, []);
+  }, [escapeHtml]);
 
   // Handle submit
   const handleSubmit = useCallback(async () => {
@@ -332,7 +343,6 @@ export function RichTextComposer({
           suppressContentEditableWarning
           dangerouslySetInnerHTML={{ __html: formatContent(content) }}
           data-placeholder={placeholder}
-          disabled={disabled}
         />
       ) : (
         <div className="composer-preview">

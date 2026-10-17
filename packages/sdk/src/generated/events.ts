@@ -3,10 +3,15 @@
 
 import * as rpc from "@stellar/stellar-sdk/rpc";
 import { scValToNative, xdr } from "@stellar/stellar-base";
-import type { GovParameter } from "./types";
+import type { GovParameter } from "./types.js";
 
 // ── Event type definitions ───────────────────────────────────────────
 
+/**
+ * Contract event: `TipEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface TipEvent {
   tipper: string;
   post_id: bigint;
@@ -14,57 +19,112 @@ export interface TipEvent {
   fee: bigint;
 }
 
+/**
+ * Contract event: `BlockEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface BlockEvent {
   blocker: string;
   blocked: string;
 }
 
+/**
+ * Contract event: `FollowEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface FollowEvent {
   follower: string;
   followee: string;
 }
 
+/**
+ * Contract event: `PostDeleted`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface PostDeleted {
   post_id: bigint;
   author: string;
 }
 
+/**
+ * Contract event: `GovVoteEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface GovVoteEvent {
   proposal_id: bigint;
   voter: string;
   support: boolean;
 }
 
+/**
+ * Contract event: `UnblockEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface UnblockEvent {
   blocker: string;
   blocked: string;
 }
 
+/**
+ * Contract event: `LikePostEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface LikePostEvent {
   user: string;
   post_id: bigint;
 }
 
+/**
+ * Contract event: `UnfollowEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface UnfollowEvent {
   follower: string;
   followee: string;
 }
 
+/**
+ * Contract event: `FeeUpdatedEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface FeeUpdatedEvent {
   name: string;
   old_fee_bps: number;
   new_fee_bps: number;
 }
 
+/**
+ * Contract event: `ProfileSetEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface ProfileSetEvent {
   user: string;
   username: string;
 }
 
+/**
+ * Contract event: `ContractUpgraded`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface ContractUpgraded {
   new_wasm_hash: Uint8Array;
 }
 
+/**
+ * Contract event: `PoolCreatedEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface PoolCreatedEvent {
   pool_id: string;
   token: string;
@@ -72,43 +132,83 @@ export interface PoolCreatedEvent {
   threshold: number;
 }
 
+/**
+ * Contract event: `PoolDepositEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface PoolDepositEvent {
   depositor: string;
   pool_id: string;
   amount: bigint;
 }
 
+/**
+ * Contract event: `PostCreatedEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface PostCreatedEvent {
   id: bigint;
   author: string;
 }
 
+/**
+ * Contract event: `PoolWithdrawEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface PoolWithdrawEvent {
   recipient: string;
   pool_id: string;
   amount: bigint;
 }
 
+/**
+ * Contract event: `DmKeyPublishedEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface DmKeyPublishedEvent {
   user: string;
   public_key: Uint8Array;
 }
 
+/**
+ * Contract event: `PoolAdminAddedEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface PoolAdminAddedEvent {
   pool_id: string;
   new_admin: string;
 }
 
+/**
+ * Contract event: `ProposalSignedEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface ProposalSignedEvent {
   pool_id: string;
   proposal_id: bigint;
   signer: string;
 }
 
+/**
+ * Contract event: `EmergencyBypassEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface EmergencyBypassEvent {
   action: string;
 }
 
+/**
+ * Contract event: `ProposalCreatedEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface ProposalCreatedEvent {
   pool_id: string;
   proposal_id: bigint;
@@ -117,17 +217,32 @@ export interface ProposalCreatedEvent {
   recipient: string;
 }
 
+/**
+ * Contract event: `TreasuryUpdatedEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface TreasuryUpdatedEvent {
   name: string;
   old_treasury: string;
   new_treasury: string;
 }
 
+/**
+ * Contract event: `PoolAdminRemovedEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface PoolAdminRemovedEvent {
   pool_id: string;
   admin: string;
 }
 
+/**
+ * Contract event: `ProposalExecutedEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface ProposalExecutedEvent {
   pool_id: string;
   proposal_id: bigint;
@@ -135,10 +250,20 @@ export interface ProposalExecutedEvent {
   recipient: string;
 }
 
+/**
+ * Contract event: `GovProposalVetoedEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface GovProposalVetoedEvent {
   proposal_id: bigint;
 }
 
+/**
+ * Contract event: `GovProposalCreatedEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface GovProposalCreatedEvent {
   proposal_id: bigint;
   proposer: string;
@@ -146,12 +271,22 @@ export interface GovProposalCreatedEvent {
   new_value: bigint;
 }
 
+/**
+ * Contract event: `GovProposalExecutedEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface GovProposalExecutedEvent {
   proposal_id: bigint;
   parameter: GovParameter;
   new_value: bigint;
 }
 
+/**
+ * Contract event: `PoolThresholdUpdatedEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
 export interface PoolThresholdUpdatedEvent {
   pool_id: string;
   old_threshold: number;
@@ -160,7 +295,16 @@ export interface PoolThresholdUpdatedEvent {
 
 // ── Event parser ─────────────────────────────────────────────
 
-export type LinkoraEvent =
+/**
+ * Raw event union type generated from the contract ABI.
+ * Uses PascalCase type discriminators (e.g. "TipEvent", "FollowEvent").
+ *
+ * NOTE: For most consumers, prefer the hand-written `LinkoraEvent` from
+ * `events/types.ts` which uses snake_case discriminators and includes
+ * rich metadata (`meta` field). This type is exported for backward
+ * compatibility and low-level RPC consumers.
+ */
+export type RawLinkoraEvent =
   | ({ type: "TipEvent" } & TipEvent)
   | ({ type: "BlockEvent" } & BlockEvent)
   | ({ type: "FollowEvent" } & FollowEvent)
@@ -190,12 +334,19 @@ export type LinkoraEvent =
   | ({ type: "PoolThresholdUpdatedEvent" } & PoolThresholdUpdatedEvent)
   | { type: "unknown"; raw: xdr.ScVal };
 
+/** @deprecated Use `RawLinkoraEvent` instead. The name `LinkoraEvent` now refers to the canonical hand-written type in `events/types.ts`. */
+export type LinkoraEvent = RawLinkoraEvent;
+
 /**
- * Parse a Soroban contract event into a typed LinkoraEvent.
+ * Parse a Soroban contract event into a typed RawLinkoraEvent.
  * The event name in topics[0] is matched against known event types.
  * Topic fields are read from topics[1..N], and data fields from the event value.
+ *
+ * NOTE: For most consumers, prefer `parseContractEvent` from `events/types.ts`
+ * which accepts a plain `SorobanEvent` object and returns the canonical
+ * `LinkoraEvent` type with rich metadata.
  */
-export function parseContractEvent(event: rpc.Api.EventResponse): LinkoraEvent | null {
+export function parseRawContractEvent(event: rpc.Api.EventResponse): RawLinkoraEvent | null {
   if (!event.topic || event.topic.length < 1) return null;
   const topic0 = event.topic[0];
   const eventType = scValToNative(topic0);

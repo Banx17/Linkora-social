@@ -7,6 +7,9 @@
 
 import { Keypair } from "@stellar/stellar-base";
 import { sha256 } from "@noble/hashes/sha256";
+import { fetchWithTimeout } from "../utils/fetch.js";
+
+const DEFAULT_RELAY_TIMEOUT_MS = 30_000;
 
 export interface RelayMessage {
   sender: string;
@@ -49,31 +52,155 @@ export class RelayAuthError extends Error {
   }
 }
 
+/**
+ * Version prefix of the DM message signature. Must stay in sync with
+ * `DM_AUTH_MESSAGE_VERSION` in `services/dm-relay/src/auth.ts`.
+ */
+export const DM_AUTH_MESSAGE_VERSION = "v2";
+
+/** Lowercase hex SHA-256 of the base64 ciphertext, as it appears on the wire. */
+export function hashCiphertext(ciphertextB64: string): string {
+  return Buffer.from(sha256(new TextEncoder().encode(ciphertextB64))).toString("hex");
+}
+
+/**
+ * Builds the exact string that gets SHA-256 hashed and Ed25519 signed before a
+ * message is submitted to the relay.
+ *
+ * Layout: `v2:{recipient}:{message_index}:{timestamp}:{ciphertextHash}`
+ *
+ * The relay derives the identical string in
+ * `services/dm-relay/src/auth.ts#buildDmAuthMessage`, so the ciphertext the
+ * signature commits to is the ciphertext that gets stored — a captured request
+ * cannot be re-sent with substituted ciphertext.
+ */
+export function buildDmAuthMessage(
+  to: string,
+  nonce: number,
+  timestamp: number,
+  ciphertextB64: string
+): string {
+  return [DM_AUTH_MESSAGE_VERSION, to, nonce, timestamp, hashCiphertext(ciphertextB64)].join(":");
+}
+
+export type ConnectionState = "connected" | "disconnected" | "reconnecting";
+
+export type ConnectionStateCallback = (state: ConnectionState) => void;
+
+export interface RelayClientConfig {
+  /** Base URL of the relay service. */
+  baseUrl: string;
+  /** Timeout in ms for HTTP requests (default 30 000). */
+  timeoutMs?: number;
+  /** Maximum number of WebSocket reconnect attempts (default: Infinity). */
+  maxReconnectAttempts?: number;
+}
+
 export class RelayClient {
   private baseUrl: string;
+  private readonly timeoutMs: number;
+  private readonly maxReconnectAttempts: number;
   private ws: WebSocket | null = null;
   private messageListeners: Set<(payload: Record<string, unknown>) => void> = new Set();
+  private stateListeners: Set<ConnectionStateCallback> = new Set();
+  private reconnectAttempts: number = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private wsAddress: string = "";
+  private permanentlyClosed: boolean = false;
+  private _connectionState: ConnectionState = "disconnected";
 
-  constructor(baseUrl: string) {
-    this.baseUrl = baseUrl.replace(/\/$/, ""); // Remove trailing slash
+  constructor(config: string | RelayClientConfig) {
+    if (typeof config === "string") {
+      this.baseUrl = config.replace(/\/$/, "");
+      this.timeoutMs = DEFAULT_RELAY_TIMEOUT_MS;
+      this.maxReconnectAttempts = Infinity;
+    } else {
+      this.baseUrl = config.baseUrl.replace(/\/$/, "");
+      this.timeoutMs = config.timeoutMs ?? DEFAULT_RELAY_TIMEOUT_MS;
+      this.maxReconnectAttempts = config.maxReconnectAttempts ?? Infinity;
+    }
+  }
+
+  /** Current WebSocket connection state. */
+  get connectionState(): ConnectionState {
+    return this._connectionState;
+  }
+
+  private setConnectionState(state: ConnectionState): void {
+    if (this._connectionState === state) return;
+    this._connectionState = state;
+    for (const listener of this.stateListeners) {
+      listener(state);
+    }
+  }
+
+  /**
+   * Register a callback for WebSocket connection state changes.
+   *
+   * @param callback Invoked when the state transitions between
+   *   "connected", "disconnected", and "reconnecting".
+   * @returns Unsubscribe function.
+   */
+  onConnectionStateChange(callback: ConnectionStateCallback): () => void {
+    this.stateListeners.add(callback);
+    return () => this.stateListeners.delete(callback);
   }
 
   /**
    * Connect to the real-time WebSocket for pushes.
    */
   connectWs(address: string) {
-    if (this.ws) return;
+    if (this.ws || this.permanentlyClosed) return;
+    this.wsAddress = address;
     const wsUrl = this.baseUrl.replace(/^http/, "ws") + `/ws?address=${address}`;
     this.ws = new WebSocket(wsUrl);
+    this.ws.onopen = () => {
+      this.reconnectAttempts = 0;
+      this.setConnectionState("connected");
+    };
     this.ws.onmessage = (event: MessageEvent) => {
       try {
         const payload = JSON.parse(event.data as string);
         this.messageListeners.forEach((listener) => listener(payload));
       } catch (_e) {}
     };
+    this.ws.onerror = () => {
+      this.ws?.close();
+    };
     this.ws.onclose = () => {
       this.ws = null;
+      this.setConnectionState("disconnected");
+      this.scheduleReconnect();
     };
+  }
+
+  /**
+   * Permanently close the WebSocket connection and stop all reconnection attempts.
+   */
+  stop(): void {
+    this.permanentlyClosed = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
+    this.setConnectionState("disconnected");
+  }
+
+  private scheduleReconnect() {
+    if (this.reconnectTimer || this.permanentlyClosed) return;
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) return;
+
+    this.setConnectionState("reconnecting");
+    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+    this.reconnectAttempts++;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connectWs(this.wsAddress);
+    }, delay);
   }
 
   onMessage(listener: (payload: Record<string, unknown>) => void) {
@@ -94,11 +221,20 @@ export class RelayClient {
 
   /**
    * Create an authentication signature for message submission.
-   * Signs sha256(sender + timestamp) with the sender's Stellar private key.
+   *
+   * Signs sha256(`v2:{recipient}:{message_index}:{timestamp}:{ciphertextHash}`)
+   * with the sender's Stellar private key — the same digest the relay
+   * recomputes in `services/dm-relay/src/auth.ts`.
    */
-  private createAuthSignature(senderKeypair: Keypair, timestamp: number): string {
-    const authData = senderKeypair.publicKey() + timestamp.toString();
-    const hash = sha256(new TextEncoder().encode(authData));
+  private createAuthSignature(
+    senderKeypair: Keypair,
+    recipient: string,
+    messageIndex: number,
+    timestamp: number,
+    ciphertextB64: string
+  ): string {
+    const authMessage = buildDmAuthMessage(recipient, messageIndex, timestamp, ciphertextB64);
+    const hash = sha256(new TextEncoder().encode(authMessage));
     const signature = senderKeypair.sign(Buffer.from(hash));
     return Buffer.from(signature).toString("hex");
   }
@@ -111,11 +247,19 @@ export class RelayClient {
     senderKeypair: Keypair,
     recipient: string,
     ciphertext: Uint8Array,
-    messageIndex: number
+    messageIndex: number,
+    retryCount: number = 0,
+    maxRetries: number = 3
   ): Promise<void> {
     const timestamp = Math.floor(Date.now() / 1000);
-    const signature = this.createAuthSignature(senderKeypair, timestamp);
     const ciphertext_b64 = Buffer.from(ciphertext).toString("base64");
+    const signature = this.createAuthSignature(
+      senderKeypair,
+      recipient,
+      messageIndex,
+      timestamp,
+      ciphertext_b64
+    );
 
     const request: SendMessageRequest = {
       sender: senderKeypair.publicKey(),
@@ -126,23 +270,52 @@ export class RelayClient {
       signature,
     };
 
-    const response = await fetch(`${this.baseUrl}/messages`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(request),
-    });
+    try {
+      const response = await fetchWithTimeout(
+        `${this.baseUrl}/messages`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            // The relay requires a per-request idempotency key so a client
+            // retry cannot store the same message twice.
+            "X-Idempotency-Key": crypto.randomUUID(),
+          },
+          body: JSON.stringify(request),
+        },
+        this.timeoutMs
+      );
 
-    if (!response.ok) {
-      const error = await response.text();
-      if (response.status === 401) {
-        throw new RelayAuthError(`Authentication failed: ${error}`);
+      if (!response.ok) {
+        const error = await response.text();
+        if (response.status === 401 || response.status === 403) {
+          throw new RelayAuthError(`Authentication failed: ${error}`);
+        }
+        if (response.status >= 400 && response.status < 500) {
+          throw new Error(`Relay request rejected (non-retryable): ${response.status} ${error}`);
+        }
+        throw new Error(`Relay request failed: ${response.status} ${error}`);
       }
-      if (response.status === 403) {
-        throw new RelayAuthError(`Request rejected: ${error}`);
+    } catch (error) {
+      if (error instanceof RelayAuthError) {
+        throw error;
       }
-      throw new Error(`Relay request failed: ${response.status} ${error}`);
+      if (error instanceof Error && error.message.includes("non-retryable")) {
+        throw error;
+      }
+      if (retryCount < maxRetries) {
+        const delay = Math.min(1000 * Math.pow(2, retryCount), 30000);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        return this.sendMessage(
+          senderKeypair,
+          recipient,
+          ciphertext,
+          messageIndex,
+          retryCount + 1,
+          maxRetries
+        );
+      }
+      throw error;
     }
   }
 
@@ -163,7 +336,11 @@ export class RelayClient {
       params.set("cursor", cursor);
     }
 
-    const response = await fetch(`${this.baseUrl}/messages/${conversationId}?${params}`);
+    const response = await fetchWithTimeout(
+      `${this.baseUrl}/messages/${conversationId}?${params}`,
+      undefined,
+      this.timeoutMs
+    );
 
     if (!response.ok) {
       throw new Error(`Failed to fetch messages: ${response.status}`);
@@ -187,7 +364,7 @@ export class RelayClient {
    * Check relay service health and connectivity.
    */
   async health(): Promise<{ status: string; timestamp: number }> {
-    const response = await fetch(`${this.baseUrl}/health`);
+    const response = await fetchWithTimeout(`${this.baseUrl}/health`, undefined, this.timeoutMs);
 
     if (!response.ok) {
       throw new Error(`Health check failed: ${response.status}`);
@@ -205,4 +382,47 @@ export function getConversationId(addressA: string, addressB: string): string {
   const sorted = [addressA, addressB].sort();
   const combined = sorted[0] + sorted[1];
   return Buffer.from(sha256(new TextEncoder().encode(combined))).toString("hex");
+}
+
+// ── Key rotation detection ───────────────────────────────────────────────────
+
+export interface KeyRotationResult {
+  /** `true` when the on-chain key differs from the cached key. */
+  rotated: boolean;
+  /** The current on-chain key (always present when `onChainKey` was provided). */
+  currentKey: Uint8Array;
+}
+
+/**
+ * Compare an on-chain X25519 public key against a previously-cached key.
+ *
+ * This is a pure comparison helper – it does **not** touch any storage.
+ * The caller is responsible for:
+ *  1. Persisting the on-chain key after a successful comparison.
+ *  2. Invalidating any cached session keys when `rotated` is `true`.
+ *  3. Resetting the sync cursor so messages under the new key are fetched.
+ *
+ * @param cachedKey  The previously-cached public key, or `null` on first sync.
+ * @param onChainKey The current key fetched from the contract.
+ * @returns A `KeyRotationResult` indicating whether a rotation occurred.
+ */
+export function detectKeyRotation(
+  cachedKey: Uint8Array | null,
+  onChainKey: Uint8Array
+): KeyRotationResult {
+  if (!cachedKey) {
+    return { rotated: false, currentKey: onChainKey };
+  }
+
+  if (cachedKey.length !== onChainKey.length) {
+    return { rotated: true, currentKey: onChainKey };
+  }
+
+  for (let i = 0; i < cachedKey.length; i++) {
+    if (cachedKey[i] !== onChainKey[i]) {
+      return { rotated: true, currentKey: onChainKey };
+    }
+  }
+
+  return { rotated: false, currentKey: onChainKey };
 }

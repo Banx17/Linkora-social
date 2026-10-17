@@ -15,7 +15,14 @@
     "test": {
       "dependsOn": ["^build"]
     },
+    "check:bundle": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
     "test:integration": {
+      "cache": false
+    },
+    "typecheck": {
       "cache": false
     },
     "format": {
