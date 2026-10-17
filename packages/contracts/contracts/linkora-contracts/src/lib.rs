@@ -88,6 +88,7 @@ const MODERATION_SLASH_BPS: Symbol = symbol_short!("MOD_SL_B");
 const CONTRACT_STATE: Symbol = symbol_short!("CT_STATE");
 const ROLES: Symbol = symbol_short!("ROLES");
 const PAUSED: Symbol = symbol_short!("PAUSED");
+const PAUSE_MASK: Symbol = symbol_short!("P_MASK");
 
 // ── TTL Constants ─────────────────────────────────────────────────────────────
 //
@@ -109,6 +110,13 @@ const TIP_COOLDOWN_LEDGERS: u32 = 17_280;
 
 const MAX_PAGE_LIMIT: u32 = 50;
 const MAX_PAGINATION_LIMIT: u32 = 50;
+
+// ── Batch & Feed Limits ───────────────────────────────────────────────────────
+
+/// Maximum number of posts accepted by `batch_create_post` in one call.
+const MAX_BATCH_POST_SIZE: u32 = 10;
+/// Maximum raw post IDs scanned by `get_recent_posts` in one call.
+const MAX_RECENT_SCAN: u32 = 500;
 
 // ── Data Types ────────────────────────────────────────────────────────────────
 
@@ -246,6 +254,33 @@ pub struct Report {
     pub status: ReportStatus,
 }
 
+// ── Per-module Pause ──────────────────────────────────────────────────────────
+
+/// Pausable feature areas. Each entry point checks only its own module, so
+/// pausing tips leaves social features running. The global `pause` flag still
+/// halts every module.
+#[contracttype]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum PauseModule {
+    Posts,
+    Tips,
+    Pools,
+    Governance,
+    Credentials,
+    Social,
+}
+
+fn pause_bit(module: PauseModule) -> u32 {
+    match module {
+        PauseModule::Posts => 1,
+        PauseModule::Tips => 2,
+        PauseModule::Pools => 4,
+        PauseModule::Governance => 8,
+        PauseModule::Credentials => 16,
+        PauseModule::Social => 32,
+    }
+}
+
 // ── Events ────────────────────────────────────────────────────────────────────
 
 #[contractevent]
@@ -320,9 +355,9 @@ pub struct UnblockEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct PostCreatedEvent {
-        #[topic]
-        pub version: u32
-    pub struct PostCreatedEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub id: u64,
     #[topic]
     pub author: Address,
@@ -331,9 +366,9 @@ pub struct PostCreatedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct TipEvent {
-        #[topic]
-        pub version: u32
-    pub struct TipEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub tipper: Address,
     #[topic]
     pub post_id: u64,
@@ -344,9 +379,9 @@ pub struct TipEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct PoolDepositEvent {
-        #[topic]
-        pub version: u32
-    pub struct PoolDepositEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub depositor: Address,
     #[topic]
     pub pool_id: Symbol,
@@ -356,9 +391,9 @@ pub struct PoolDepositEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct PoolWithdrawEvent {
-        #[topic]
-        pub version: u32
-    pub struct PoolWithdrawEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub recipient: Address,
     #[topic]
     pub pool_id: Symbol,
@@ -368,9 +403,9 @@ pub struct PoolWithdrawEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct PoolCreatedEvent {
-        #[topic]
-        pub version: u32
-    pub struct PoolCreatedEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub pool_id: Symbol,
     pub token: Address,
     pub admins: Vec<Address>,
@@ -380,9 +415,9 @@ pub struct PoolCreatedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct LikePostEvent {
-        #[topic]
-        pub version: u32
-    pub struct LikePostEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub user: Address,
     #[topic]
     pub post_id: u64,
@@ -397,18 +432,36 @@ pub struct ContractUpgraded {
 #[contractevent]
 #[derive(Clone)]
 pub struct PausedEvent {
-        #[topic]
-        pub version: u32
-    pub struct PausedEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub admin: Address,
 }
 
 #[contractevent]
 #[derive(Clone)]
 pub struct UnpausedEvent {
-        #[topic]
-        pub version: u32
-    pub struct UnpausedEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
+    pub admin: Address,
+}
+
+#[contractevent]
+#[derive(Clone)]
+pub struct ModulePausedEvent {
+    #[topic]
+    pub version: u32,
+    pub module: PauseModule,
+    pub admin: Address,
+}
+
+#[contractevent]
+#[derive(Clone)]
+pub struct ModuleUnpausedEvent {
+    #[topic]
+    pub version: u32,
+    pub module: PauseModule,
     pub admin: Address,
 }
 
@@ -424,9 +477,9 @@ pub struct PostDeleted {
 #[contractevent]
 #[derive(Clone)]
 pub struct ProfileDeletedEvent {
-        #[topic]
-        pub version: u32
-    pub struct ProfileDeletedEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub user: Address,
     pub username: String,
 }
@@ -434,9 +487,9 @@ pub struct ProfileDeletedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct ProposalCreatedEvent {
-        #[topic]
-        pub version: u32
-    pub struct ProposalCreatedEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub pool_id: Symbol,
     #[topic]
     pub proposal_id: u64,
@@ -448,9 +501,9 @@ pub struct ProposalCreatedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct ProposalSignedEvent {
-        #[topic]
-        pub version: u32
-    pub struct ProposalSignedEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub pool_id: Symbol,
     #[topic]
     pub proposal_id: u64,
@@ -460,9 +513,9 @@ pub struct ProposalSignedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct ProposalExecutedEvent {
-        #[topic]
-        pub version: u32
-    pub struct ProposalExecutedEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub pool_id: Symbol,
     #[topic]
     pub proposal_id: u64,
@@ -473,9 +526,9 @@ pub struct ProposalExecutedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct PoolAdminAddedEvent {
-        #[topic]
-        pub version: u32
-    pub struct PoolAdminAddedEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub pool_id: Symbol,
     pub new_admin: Address,
 }
@@ -483,9 +536,9 @@ pub struct PoolAdminAddedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct PoolAdminRemovedEvent {
-        #[topic]
-        pub version: u32
-    pub struct PoolAdminRemovedEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub pool_id: Symbol,
     pub admin: Address,
 }
@@ -493,9 +546,9 @@ pub struct PoolAdminRemovedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct PoolThresholdUpdatedEvent {
-        #[topic]
-        pub version: u32
-    pub struct PoolThresholdUpdatedEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub pool_id: Symbol,
     pub old_threshold: u32,
     pub new_threshold: u32,
@@ -504,9 +557,9 @@ pub struct PoolThresholdUpdatedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct DmKeyPublishedEvent {
-        #[topic]
-        pub version: u32
-    pub struct DmKeyPublishedEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub user: Address,
     pub public_key: BytesN<32>,
 }
@@ -514,9 +567,9 @@ pub struct DmKeyPublishedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct CredentialRootUpdatedEvent {
-        #[topic]
-        pub version: u32
-    pub struct CredentialRootUpdatedEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub user: Address,
     pub root: BytesN<32>,
 }
@@ -524,9 +577,9 @@ pub struct CredentialRootUpdatedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct CredentialVerifiedEvent {
-        #[topic]
-        pub version: u32
-    pub struct CredentialVerifiedEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub user: Address,
     #[topic]
     pub nullifier: BytesN<32>,
@@ -535,9 +588,9 @@ pub struct CredentialVerifiedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct FeeUpdatedEvent {
-        #[topic]
-        pub version: u32
-    pub struct FeeUpdatedEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub name: Symbol,
     pub old_fee_bps: u32,
     pub new_fee_bps: u32,
@@ -546,9 +599,9 @@ pub struct FeeUpdatedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct TreasuryUpdatedEvent {
-        #[topic]
-        pub version: u32
-    pub struct TreasuryUpdatedEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub name: Symbol,
     pub old_treasury: Address,
     pub new_treasury: Address,
@@ -557,9 +610,9 @@ pub struct TreasuryUpdatedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct RoleGrantedEvent {
-        #[topic]
-        pub version: u32
-    pub struct RoleGrantedEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub role: Role,
     #[topic]
     pub account: Address,
@@ -569,9 +622,9 @@ pub struct RoleGrantedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct RoleRevokedEvent {
-        #[topic]
-        pub version: u32
-    pub struct RoleRevokedEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub role: Role,
     #[topic]
     pub account: Address,
@@ -581,9 +634,9 @@ pub struct RoleRevokedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct GovProposalCreatedEvent {
-        #[topic]
-        pub version: u32
-    pub struct GovProposalCreatedEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub proposal_id: u64,
     pub proposer: Address,
     pub parameter: GovParameter,
@@ -593,9 +646,9 @@ pub struct GovProposalCreatedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct GovVoteEvent {
-        #[topic]
-        pub version: u32
-    pub struct GovVoteEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub proposal_id: u64,
     #[topic]
     pub voter: Address,
@@ -605,9 +658,9 @@ pub struct GovVoteEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct GovProposalExecutedEvent {
-        #[topic]
-        pub version: u32
-    pub struct GovProposalExecutedEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub proposal_id: u64,
     pub parameter: GovParameter,
     pub new_value: u64,
@@ -616,27 +669,27 @@ pub struct GovProposalExecutedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct GovProposalVetoedEvent {
-        #[topic]
-        pub version: u32
-    pub struct GovProposalVetoedEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub proposal_id: u64,
 }
 
 #[contractevent]
 #[derive(Clone)]
 pub struct EmergencyBypassEvent {
-        #[topic]
-        pub version: u32
-    pub struct EmergencyBypassEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub action: Symbol,
 }
 
 #[contractevent]
 #[derive(Clone)]
 pub struct AttestationVerifiedEvent {
-        #[topic]
-        pub version: u32
-    pub struct AttestationVerifiedEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub oracle_name: Symbol,
     #[topic]
     pub report_hash: BytesN<32>,
@@ -648,9 +701,9 @@ pub struct AttestationVerifiedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct PostReportedEvent {
-        #[topic]
-        pub version: u32
-    pub struct PostReportedEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub post_id: u64,
     #[topic]
     pub reporter: Address,
@@ -660,9 +713,9 @@ pub struct PostReportedEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct PostRemovedByModerationEvent {
-        #[topic]
-        pub version: u32
-    pub struct PostRemovedByModerationEvent { version: EVENT_VERSION, #[topic]
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub post_id: u64,
     #[topic]
     pub reporter: Address,
@@ -671,13 +724,9 @@ pub struct PostRemovedByModerationEvent {
 #[contractevent]
 #[derive(Clone)]
 pub struct ReportDismissedEvent {
-        #[topic]
-        pub version: u32
-    #[contractevent]
-    #[derive(Clone)]
-    pub struct ReportDismissedEvent {
-        #[topic]
-        pub version: u32,
+    #[topic]
+    pub version: u32,
+    #[topic]
     pub post_id: u64,
     #[topic]
     pub reporter: Address,
@@ -1105,6 +1154,7 @@ impl LinkoraContract {
     /// root updates. Admin only.
     pub fn set_credential_authority(env: Env, admin: Address, pubkey: BytesN<32>) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env, PauseModule::Credentials);
         admin.require_auth();
         validate_non_default_address(&env, "admin", &admin);
         Self::require_role(&env, &admin, Role::Admin);
@@ -1120,6 +1170,7 @@ impl LinkoraContract {
         signature: BytesN<64>,
     ) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env, PauseModule::Credentials);
         user.require_auth();
         validate_non_default_address(&env, "user", &user);
         validate_signature(&env, "signature", &signature);
@@ -1236,7 +1287,7 @@ impl LinkoraContract {
             follower != followee,
             "follower and followee must be different"
         );
-        Self::require_not_paused(&env);
+        Self::require_not_paused(&env, PauseModule::Social);
 
         if Self::is_blocked(env.clone(), followee.clone(), follower.clone()) {
             panic!("blocked");
@@ -1352,7 +1403,7 @@ impl LinkoraContract {
             follower != followee,
             "follower and followee must be different"
         );
-        Self::require_not_paused(&env);
+        Self::require_not_paused(&env, PauseModule::Social);
 
         let edge_key = StorageKey::Edge(follower.clone(), followee.clone());
 
@@ -1538,7 +1589,7 @@ impl LinkoraContract {
             blocker != blocked,
             "blocker and blocked must be different"
         );
-        Self::require_not_paused(&env);
+        Self::require_not_paused(&env, PauseModule::Social);
         let key = StorageKey::Blocks(blocker.clone());
         let mut blocks: Map<Address, ()> = env
             .storage()
@@ -1568,7 +1619,7 @@ impl LinkoraContract {
             blocker != blocked,
             "blocker and blocked must be different"
         );
-        Self::require_not_paused(&env);
+        Self::require_not_paused(&env, PauseModule::Social);
         let key = StorageKey::Blocks(blocker.clone());
         let mut blocks: Map<Address, ()> = env
             .storage()
@@ -1599,8 +1650,35 @@ impl LinkoraContract {
         author.require_auth();
         validate_non_default_address(&env, "author", &author);
         validate_content(&env, &content);
-        Self::require_not_paused(&env);
+        Self::require_not_paused(&env, PauseModule::Posts);
 
+        Self::insert_post(&env, author, content)
+    }
+
+    /// Create up to `MAX_BATCH_POST_SIZE` posts in one call. Each content is
+    /// validated with the same rules as `create_post`, and every post emits its
+    /// own `PostCreatedEvent`. Returns the new post IDs in input order. The batch
+    /// is atomic: one invalid content reverts the whole call.
+    pub fn batch_create_post(env: Env, author: Address, contents: Vec<String>) -> Vec<u64> {
+        Self::bump_instance(&env);
+        author.require_auth();
+        validate_non_default_address(&env, "author", &author);
+        require_with_error!(
+            &env,
+            !contents.is_empty() && contents.len() <= MAX_BATCH_POST_SIZE,
+            "batch size must be between 1 and 10"
+        );
+        Self::require_not_paused(&env, PauseModule::Posts);
+
+        let mut ids = Vec::new(&env);
+        for content in contents.iter() {
+            validate_content(&env, &content);
+            ids.push_back(Self::insert_post(&env, author.clone(), content));
+        }
+        ids
+    }
+
+    fn insert_post(env: &Env, author: Address, content: String) -> u64 {
         let id: u64 = env.storage().instance().get(&POST_CT).unwrap_or(0u64) + 1;
         let key = StorageKey::Post(id);
         env.storage().persistent().set(
@@ -1614,7 +1692,7 @@ impl LinkoraContract {
                 like_count: 0,
             },
         );
-        Self::bump(&env, &key);
+        Self::bump(env, &key);
         env.storage().instance().set(&POST_CT, &id);
 
         // Track post ID under author's posts
@@ -1623,12 +1701,12 @@ impl LinkoraContract {
             .storage()
             .persistent()
             .get(&author_key)
-            .unwrap_or(Vec::new(&env));
+            .unwrap_or(Vec::new(env));
         author_posts.push_back(id);
         env.storage().persistent().set(&author_key, &author_posts);
-        Self::bump(&env, &author_key);
+        Self::bump(env, &author_key);
 
-        PostCreatedEvent { version: EVENT_VERSION, id, author }.publish(&env);
+        PostCreatedEvent { version: EVENT_VERSION, id, author }.publish(env);
         id
     }
 
@@ -1653,7 +1731,7 @@ impl LinkoraContract {
         author.require_auth();
         validate_non_default_address(&env, "author", &author);
         require_with_error!(&env, post_id > 0, "post id must be positive");
-        Self::require_not_paused(&env);
+        Self::require_not_paused(&env, PauseModule::Posts);
         let key = StorageKey::Post(post_id);
         let post: Post = env.storage().persistent().get(&key).unwrap_or_else(|| {
             panic!("post does not exist: {}", post_id);
@@ -1799,6 +1877,37 @@ impl LinkoraContract {
         paginate(&env, &posts, offset, limit)
     }
 
+    /// Best-effort global recency feed: post IDs, newest first, skipping
+    /// tombstoned posts (`DeletedPost`). `offset` and `limit` count live posts
+    /// only. At most `MAX_RECENT_SCAN` raw IDs are examined per call, so a page
+    /// can come back shorter than `limit` after heavy deletion. Intended for
+    /// minimal clients; the indexer remains the source of truth for feeds.
+    pub fn get_recent_posts(env: Env, offset: u32, limit: u32) -> Vec<u64> {
+        assert!(
+            limit > 0 && limit <= MAX_PAGE_LIMIT,
+            "limit must be between 1 and 50"
+        );
+
+        let mut page = Vec::new(&env);
+        let mut skipped: u32 = 0;
+        let mut scanned: u32 = 0;
+        let mut id = Self::get_post_count(env.clone());
+        while id > 0 && page.len() < limit && scanned < MAX_RECENT_SCAN {
+            let is_live = env.storage().persistent().has(&StorageKey::Post(id))
+                && !env.storage().persistent().has(&StorageKey::DeletedPost(id));
+            if is_live {
+                if skipped < offset {
+                    skipped += 1;
+                } else {
+                    page.push_back(id);
+                }
+            }
+            id -= 1;
+            scanned += 1;
+        }
+        page
+    }
+
     // ── Reactions ─────────────────────────────────────────────────────────────
 
     pub fn like_post(env: Env, user: Address, post_id: u64) {
@@ -1806,7 +1915,7 @@ impl LinkoraContract {
         user.require_auth();
         validate_non_default_address(&env, "user", &user);
         require_with_error!(&env, post_id > 0, "post id must be positive");
-        Self::require_not_paused(&env);
+        Self::require_not_paused(&env, PauseModule::Posts);
 
         let like_key = StorageKey::Like(post_id, user.clone());
         if env.storage().persistent().has(&like_key) {
@@ -1864,6 +1973,7 @@ impl LinkoraContract {
 
     pub fn tip(env: Env, tipper: Address, post_id: u64, token: Address, amount: i128) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env, PauseModule::Tips);
         tipper.require_auth();
         validate_non_default_address(&env, "tipper", &tipper);
         validate_non_default_address(&env, "token", &token);
@@ -1959,6 +2069,7 @@ impl LinkoraContract {
         threshold: u32,
     ) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env, PauseModule::Pools);
         admin.require_auth();
         validate_non_default_address(&env, "admin", &admin);
         validate_non_default_address(&env, "token", &token);
@@ -2001,6 +2112,7 @@ impl LinkoraContract {
         amount: i128,
     ) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env, PauseModule::Pools);
         validate_non_default_address(&env, "depositor", &depositor);
         validate_non_default_address(&env, "token", &token);
         validate_amount(&env, "deposit amount", amount);
@@ -2039,6 +2151,7 @@ impl LinkoraContract {
         recipient: Address,
     ) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env, PauseModule::Pools);
         validate_address_list(&env, "signers", &signers);
         validate_non_default_address(&env, "recipient", &recipient);
         validate_amount(&env, "withdraw amount", amount);
@@ -2097,6 +2210,7 @@ impl LinkoraContract {
 
     pub fn add_pool_admin(env: Env, signers: Vec<Address>, pool_id: Symbol, new_admin: Address) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env, PauseModule::Pools);
         validate_address_list(&env, "signers", &signers);
         validate_non_default_address(&env, "new_admin", &new_admin);
         let key = StorageKey::Pool(pool_id.clone());
@@ -2129,6 +2243,7 @@ impl LinkoraContract {
 
     pub fn remove_pool_admin(env: Env, signers: Vec<Address>, pool_id: Symbol, admin: Address) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env, PauseModule::Pools);
         validate_address_list(&env, "signers", &signers);
         validate_non_default_address(&env, "admin", &admin);
         let key = StorageKey::Pool(pool_id.clone());
@@ -2170,6 +2285,7 @@ impl LinkoraContract {
 
     pub fn update_pool_threshold(env: Env, signers: Vec<Address>, pool_id: Symbol, threshold: u32) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env, PauseModule::Pools);
         validate_address_list(&env, "signers", &signers);
         validate_u32_range(&env, "threshold", threshold, 1, MAX_QUORUM);
         let key = StorageKey::Pool(pool_id.clone());
@@ -2213,7 +2329,7 @@ impl LinkoraContract {
         validate_non_default_address(&env, "admin", &admin);
         Self::require_role(&env, &admin, Role::Admin);
         validate_protocol_fee(&env, fee_bps);
-        Self::require_not_paused(&env);
+        Self::require_not_paused(&env, PauseModule::Governance);
         assert!(fee_bps <= 10_000, "invalid fee");
         let old_fee_bps = Self::get_fee_bps(env.clone());
         env.storage().instance().set(&FEE_BPS, &fee_bps);
@@ -2233,7 +2349,7 @@ impl LinkoraContract {
         validate_non_default_address(&env, "admin", &admin);
         Self::require_role(&env, &admin, Role::Admin);
         validate_non_default_address(&env, "treasury", &treasury);
-        Self::require_not_paused(&env);
+        Self::require_not_paused(&env, PauseModule::Governance);
         let old_treasury = Self::get_treasury(env.clone()).expect("treasury not set");
         env.storage().instance().set(&TREASURY, &treasury);
         TreasuryUpdatedEvent { version: EVENT_VERSION, name: symbol_short!("treas_upd"),
@@ -2260,7 +2376,7 @@ impl LinkoraContract {
         validate_non_default_address(&env, "admin", &admin);
         Self::require_role(&env, &admin, Role::Admin);
         validate_u32_range(&env, "cooldown_ledgers", cooldown_ledgers, 1, u32::MAX);
-        Self::require_not_paused(&env);
+        Self::require_not_paused(&env, PauseModule::Tips);
         assert!(cooldown_ledgers > 0, "cooldown must be positive");
         env.storage()
             .instance()
@@ -2338,6 +2454,7 @@ impl LinkoraContract {
         new_address: Option<Address>,
     ) -> u64 {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env, PauseModule::Governance);
         proposer.require_auth();
         validate_non_default_address(&env, "proposer", &proposer);
         validate_gov_parameter(&env, &parameter);
@@ -2413,6 +2530,7 @@ impl LinkoraContract {
 
     pub fn gov_vote(env: Env, voter: Address, proposal_id: u64, support: bool) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env, PauseModule::Governance);
         voter.require_auth();
         validate_non_default_address(&env, "voter", &voter);
         require_with_error!(&env, proposal_id > 0, "proposal id must be positive");
@@ -2492,6 +2610,7 @@ impl LinkoraContract {
 
     pub fn gov_execute(env: Env, proposal_id: u64) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env, PauseModule::Governance);
         require_with_error!(&env, proposal_id > 0, "proposal id must be positive");
 
         let config_key = StorageKey::GovConfig;
@@ -2591,6 +2710,7 @@ impl LinkoraContract {
 
     pub fn gov_veto(env: Env, signers: Vec<Address>, pool_id: Symbol, proposal_id: u64) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env, PauseModule::Governance);
         validate_address_list(&env, "signers", &signers);
         require_with_error!(&env, proposal_id > 0, "proposal id must be positive");
 
@@ -2748,7 +2868,7 @@ impl LinkoraContract {
             .expect("contract version overflow");
         state.implementation_wasm_hash = Some(new_wasm_hash.clone());
         env.storage().instance().set(&CONTRACT_STATE, &state);
-        Self::require_not_paused(&env);
+        Self::require_not_paused(&env, PauseModule::Governance);
         env.deployer()
             .update_current_contract_wasm(new_wasm_hash.clone());
         ContractUpgraded { new_wasm_hash }.publish(&env);
@@ -3278,7 +3398,57 @@ impl LinkoraContract {
             .unwrap_or(false)
     }
 
-    fn require_not_paused(env: &Env) {
+    /// Pause a single module. Other modules keep running. Requires the Pauser
+    /// role (Admin is also accepted). Emits `ModulePausedEvent`.
+    pub fn pause_module(env: Env, admin: Address, module: PauseModule) {
+        Self::bump_instance(&env);
+        admin.require_auth();
+        validate_non_default_address(&env, "admin", &admin);
+        require_with_error!(
+            &env,
+            Self::has_role_internal(&env, &admin, Role::Pauser)
+                || Self::has_role_internal(&env, &admin, Role::Admin),
+            "Pauser role required"
+        );
+        let mask = Self::get_pause_mask(&env);
+        let bit = pause_bit(module);
+        require_with_error!(&env, (mask & bit) == 0, "module already paused");
+        env.storage().instance().set(&PAUSE_MASK, &(mask | bit));
+        ModulePausedEvent { version: EVENT_VERSION, module, admin }.publish(&env);
+    }
+
+    /// Resume a single module. Emits `ModuleUnpausedEvent`.
+    pub fn unpause_module(env: Env, admin: Address, module: PauseModule) {
+        Self::bump_instance(&env);
+        admin.require_auth();
+        validate_non_default_address(&env, "admin", &admin);
+        require_with_error!(
+            &env,
+            Self::has_role_internal(&env, &admin, Role::Pauser)
+                || Self::has_role_internal(&env, &admin, Role::Admin),
+            "Pauser role required"
+        );
+        let mask = Self::get_pause_mask(&env);
+        let bit = pause_bit(module);
+        require_with_error!(&env, (mask & bit) != 0, "module not paused");
+        env.storage().instance().set(&PAUSE_MASK, &(mask & !bit));
+        ModuleUnpausedEvent { version: EVENT_VERSION, module, admin }.publish(&env);
+    }
+
+    /// Returns true when this module's own flag is set. The global `is_paused`
+    /// flag is not included.
+    pub fn is_module_paused(env: Env, module: PauseModule) -> bool {
+        (Self::get_pause_mask(&env) & pause_bit(module)) != 0
+    }
+
+    fn get_pause_mask(env: &Env) -> u32 {
+        env.storage()
+            .instance()
+            .get::<Symbol, u32>(&PAUSE_MASK)
+            .unwrap_or(0)
+    }
+
+    fn require_not_paused(env: &Env, module: PauseModule) {
         if env
             .storage()
             .instance()
@@ -3287,6 +3457,11 @@ impl LinkoraContract {
         {
             panic!("contract is paused");
         }
+        require_with_error!(
+            env,
+            (Self::get_pause_mask(env) & pause_bit(module)) == 0,
+            "module is paused"
+        );
     }
 
     /// Extend the TTL of a persistent entry after every write and on every
