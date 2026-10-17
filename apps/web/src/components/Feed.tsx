@@ -26,12 +26,22 @@ export function Feed({ posts, loading, onLike, onTip, likedPosts = new Set() }: 
   // once the optimistic write settles.
   const [pendingLikes, setPendingLikes] = useState<Set<number>>(new Set());
 
+  // For aria-live announcements of feed updates
+  const [announcement, setAnnouncement] = useState<string>("");
+
   useEffect(() => {
     let cancelled = false;
 
     const check = async () => {
       const isPaused = await fetchIsPaused();
-      if (!cancelled) setPaused(isPaused);
+      if (!cancelled) {
+        setPaused(isPaused);
+        if (isPaused) {
+          setAnnouncement("Linkora is temporarily paused. Write operations are disabled.");
+        } else if (paused) {
+          setAnnouncement("Linkora is now active. Write operations are enabled.");
+        }
+      }
     };
 
     check();
@@ -40,7 +50,7 @@ export function Feed({ posts, loading, onLike, onTip, likedPosts = new Set() }: 
       cancelled = true;
       clearInterval(interval);
     };
-  }, []);
+  }, [paused]);
 
   // Clear transient "pending" styling for the affected post when an optimistic
   // like/follow write is rolled back after a failed transaction.
@@ -56,6 +66,8 @@ export function Feed({ posts, loading, onLike, onTip, likedPosts = new Set() }: 
         next.delete(postId);
         return next;
       });
+      // Announce the failure to screen readers
+      setAnnouncement(`Operation failed for post ${postId}. Please try again.`);
     });
     return unsubscribe;
   }, []);
@@ -109,6 +121,9 @@ export function Feed({ posts, loading, onLike, onTip, likedPosts = new Set() }: 
 
   return (
     <div style={styles.container}>
+      <div aria-live="polite" aria-atomic="true" role="status" style={{ position: "absolute", left: "-10000px" }}>
+        {announcement}
+      </div>
       {paused && (
         <div style={styles.pausedBanner} role="alert">
           Linkora is temporarily paused. Writes are disabled until the protocol resumes.
