@@ -8869,3 +8869,288 @@ fn test_batch_cleanup_post_emits_event_summary() {
     client.batch_cleanup_post(&post_id, &10);
     assert!(client.get_post(&post_id).is_none());
 }
+
+// ── Per-module pause tests ───────────────────────────────────────────────────
+
+fn setup_with_pauser(env: &Env) -> (LinkoraContractClient<'_>, Address) {
+    let (client, admin, _) = setup_contract(env);
+    let pauser = Address::generate(env);
+    client.grant_role(&admin, &pauser, &Role::Pauser);
+    (client, pauser)
+}
+
+#[test]
+fn pause_module_flags_are_independent() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, pauser) = setup_with_pauser(&env);
+
+    client.pause_module(&pauser, &PauseModule::Tips);
+    assert!(client.is_module_paused(&PauseModule::Tips));
+    assert!(!client.is_module_paused(&PauseModule::Posts));
+    assert!(!client.is_module_paused(&PauseModule::Social));
+
+    let author = Address::generate(&env);
+    let id = client.create_post(&author, &String::from_str(&env, "still live"));
+    assert_eq!(id, 1);
+
+    client.unpause_module(&pauser, &PauseModule::Tips);
+    assert!(!client.is_module_paused(&PauseModule::Tips));
+}
+
+#[test]
+#[should_panic(expected = "module is paused")]
+fn pause_posts_blocks_create_post() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, pauser) = setup_with_pauser(&env);
+
+    client.pause_module(&pauser, &PauseModule::Posts);
+    let author = Address::generate(&env);
+    client.create_post(&author, &String::from_str(&env, "blocked"));
+}
+
+#[test]
+#[should_panic(expected = "module is paused")]
+fn pause_posts_blocks_batch_create_post() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, pauser) = setup_with_pauser(&env);
+
+    client.pause_module(&pauser, &PauseModule::Posts);
+    let author = Address::generate(&env);
+    client.batch_create_post(&author, &vec![&env, String::from_str(&env, "blocked")]);
+}
+
+#[test]
+#[should_panic(expected = "module is paused")]
+fn pause_social_blocks_follow() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, pauser) = setup_with_pauser(&env);
+
+    client.pause_module(&pauser, &PauseModule::Social);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    client.follow(&alice, &bob);
+}
+
+#[test]
+#[should_panic(expected = "module is paused")]
+fn pause_tips_blocks_tip() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, pauser) = setup_with_pauser(&env);
+
+    client.pause_module(&pauser, &PauseModule::Tips);
+    let tipper = Address::generate(&env);
+    client.tip(&tipper, &1u64, &Address::generate(&env), &100i128);
+}
+
+#[test]
+#[should_panic(expected = "module is paused")]
+fn pause_pools_blocks_create_pool() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, pauser) = setup_with_pauser(&env);
+
+    client.pause_module(&pauser, &PauseModule::Pools);
+    client.create_pool(
+        &pauser,
+        &symbol_short!("pool"),
+        &Address::generate(&env),
+        &vec![&env, pauser.clone()],
+        &1,
+    );
+}
+
+#[test]
+#[should_panic(expected = "module is paused")]
+fn pause_governance_blocks_gov_propose() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, pauser) = setup_with_pauser(&env);
+
+    client.pause_module(&pauser, &PauseModule::Governance);
+    let proposer = Address::generate(&env);
+    client.gov_propose(&proposer, &GovParameter::FeeBps, &100u64, &None);
+}
+
+#[test]
+#[should_panic(expected = "module is paused")]
+fn pause_credentials_blocks_authority_update() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, pauser) = setup_with_pauser(&env);
+
+    client.pause_module(&pauser, &PauseModule::Credentials);
+    client.set_credential_authority(&pauser, &BytesN::from_array(&env, &[7u8; 32]));
+}
+
+#[test]
+#[should_panic(expected = "Pauser role required")]
+fn pause_module_requires_pauser_role() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+
+    let outsider = Address::generate(&env);
+    client.pause_module(&outsider, &PauseModule::Posts);
+}
+
+#[test]
+#[should_panic(expected = "module already paused")]
+fn pause_module_twice_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, pauser) = setup_with_pauser(&env);
+
+    client.pause_module(&pauser, &PauseModule::Posts);
+    client.pause_module(&pauser, &PauseModule::Posts);
+}
+
+#[test]
+#[should_panic(expected = "module not paused")]
+fn unpause_module_when_running_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, pauser) = setup_with_pauser(&env);
+
+    client.unpause_module(&pauser, &PauseModule::Posts);
+}
+
+// ── batch_create_post tests ──────────────────────────────────────────────────
+
+#[test]
+fn batch_create_post_returns_ids_in_order() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+    let author = Address::generate(&env);
+
+    let ids = client.batch_create_post(
+        &author,
+        &vec![
+            &env,
+            String::from_str(&env, "one"),
+            String::from_str(&env, "two"),
+            String::from_str(&env, "three"),
+        ],
+    );
+    assert_eq!(ids, vec![&env, 1u64, 2u64, 3u64]);
+    assert_eq!(client.get_post_count(), 3);
+    assert_eq!(
+        client.get_posts_by_author(&author, &0, &10),
+        vec![&env, 1u64, 2u64, 3u64]
+    );
+    assert_eq!(
+        client.get_post(&2).unwrap().content,
+        String::from_str(&env, "two")
+    );
+}
+
+#[test]
+#[should_panic(expected = "content must be at most 280 characters")]
+fn batch_create_post_rejects_over_limit_content() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+    let author = Address::generate(&env);
+
+    let too_long = String::from_str(&env, &"a".repeat(281));
+    client.batch_create_post(&author, &vec![&env, String::from_str(&env, "ok"), too_long]);
+}
+
+#[test]
+fn batch_create_post_is_atomic_on_invalid_content() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+    let author = Address::generate(&env);
+
+    let too_long = String::from_str(&env, &"a".repeat(281));
+    let result = client.try_batch_create_post(
+        &author,
+        &vec![&env, String::from_str(&env, "ok"), too_long],
+    );
+    assert!(result.is_err());
+    assert_eq!(client.get_post_count(), 0);
+}
+
+#[test]
+#[should_panic(expected = "batch size must be between 1 and 10")]
+fn batch_create_post_rejects_oversized_batch() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+    let author = Address::generate(&env);
+
+    let mut contents = vec![&env];
+    for _ in 0..11 {
+        contents.push_back(String::from_str(&env, "x"));
+    }
+    client.batch_create_post(&author, &contents);
+}
+
+#[test]
+#[should_panic(expected = "batch size must be between 1 and 10")]
+fn batch_create_post_rejects_empty_batch() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+    let author = Address::generate(&env);
+
+    client.batch_create_post(&author, &vec![&env]);
+}
+
+// ── get_recent_posts tests ───────────────────────────────────────────────────
+
+#[test]
+fn get_recent_posts_is_newest_first_and_paginates() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+    let author = Address::generate(&env);
+
+    assert_eq!(client.get_recent_posts(&0, &10).len(), 0);
+    for i in 1..=5 {
+        client.create_post(&author, &String::from_str(&env, &format!("post {i}")));
+    }
+
+    assert_eq!(client.get_recent_posts(&0, &2), vec![&env, 5u64, 4u64]);
+    assert_eq!(client.get_recent_posts(&2, &2), vec![&env, 3u64, 2u64]);
+    assert_eq!(client.get_recent_posts(&4, &2), vec![&env, 1u64]);
+    assert_eq!(client.get_recent_posts(&5, &2).len(), 0);
+}
+
+#[test]
+fn get_recent_posts_skips_deleted_posts() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+    let author = Address::generate(&env);
+
+    for i in 1..=5 {
+        client.create_post(&author, &String::from_str(&env, &format!("post {i}")));
+    }
+    client.delete_post(&author, &4);
+    client.delete_post(&author, &2);
+
+    assert_eq!(
+        client.get_recent_posts(&0, &10),
+        vec![&env, 5u64, 3u64, 1u64]
+    );
+    assert_eq!(client.get_recent_posts(&1, &1), vec![&env, 3u64]);
+    assert_eq!(client.get_recent_posts(&1, &2), vec![&env, 3u64, 1u64]);
+    assert_eq!(client.get_recent_posts(&3, &5).len(), 0);
+}
+
+#[test]
+#[should_panic(expected = "limit must be between 1 and 50")]
+fn get_recent_posts_rejects_limit_over_max_page() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+
+    client.get_recent_posts(&0, &51);
+}

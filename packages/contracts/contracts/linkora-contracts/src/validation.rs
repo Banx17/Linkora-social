@@ -154,6 +154,10 @@ pub fn validate_username(env: &Env, username: &String) {
     }
 }
 
+pub fn validate_content(env: &Env, content: &String) {
+    validate_string_max_len(env, "content", content, MAX_CONTENT_LEN);
+}
+
 pub fn validate_amount(env: &Env, label: &str, amount: i128) {
     require_with_error!(
         env,
