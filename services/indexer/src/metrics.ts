@@ -66,6 +66,11 @@ export const followCountDriftTotal = new Counter(
   "Number of profiles whose indexed follow count differs from follows"
 );
 
+export const notificationsPrunedTotal = new Counter(
+  "notifications_pruned_total",
+  "Number of sent_notification rows deleted by the retention job"
+);
+
 export const streamHealth = {
   started: false,
   open: false,
@@ -85,6 +90,7 @@ export function metricsText(): string {
     notificationPushFailuresTotal,
     notificationPushRetriesTotal,
     followCountDriftTotal,
+    notificationsPrunedTotal,
   ]
     .map((metric) => metric.toPrometheus())
     .concat(
