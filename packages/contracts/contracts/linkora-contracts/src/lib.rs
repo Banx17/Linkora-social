@@ -51,6 +51,7 @@ pub enum StorageKey {
     GovVote(u64, Address), // persistent: (proposal_id, voter) -> bool (prevents double-voting)
     GovConfig,             // persistent: governance configuration
     GovProposalCount,      // persistent: next proposal id counter
+    GovDelegation(Address), // persistent: delegator -> delegate Address (Issue #1664)
     // ── Analytics Oracle ──────────────────────────────────────────────────
     OracleKey(Symbol), // persistent: oracle_name -> BytesN<32> Ed25519 pubkey
     AttestationNullifier(BytesN<32>), // persistent: sha256(report_cbor) -> bool (replay guard)
@@ -243,6 +244,19 @@ pub struct GovProposal {
     /// Proposal expiry window in ledgers from creation (Issue #1663).
     /// Proposals cannot be executed after this window closes, preventing indefinite execution.
     pub expiry_ledgers: u32,
+    /// Proposal metadata: title, description, and rationale (Issue #1665)
+    pub metadata: Option<ProposalMetadata>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ProposalMetadata {
+    /// Short title of the proposal (max 100 chars)
+    pub title: String,
+    /// Detailed description of the proposal (max 1000 chars)
+    pub description: String,
+    /// Rationale and supporting evidence (max 5000 chars)
+    pub rationale: Option<String>,
 }
 
 #[contracttype]
@@ -2700,6 +2714,7 @@ impl LinkoraContract {
         parameter: GovParameter,
         new_value: u64,
         new_address: Option<Address>,
+        metadata: Option<ProposalMetadata>,
     ) -> u64 {
         Self::bump_instance(&env);
         Self::require_not_paused(&env, PauseModule::Governance);
@@ -2736,6 +2751,27 @@ impl LinkoraContract {
             validate_non_default_address(&env, "new_address", address);
         }
 
+        // Validate proposal metadata (Issue #1665)
+        if let Some(meta) = &metadata {
+            require_with_error!(
+                &env,
+                !meta.title.is_empty() && meta.title.len() <= 100,
+                "proposal title must be 1-100 characters"
+            );
+            require_with_error!(
+                &env,
+                !meta.description.is_empty() && meta.description.len() <= 1000,
+                "proposal description must be 1-1000 characters"
+            );
+            if let Some(rationale) = &meta.rationale {
+                require_with_error!(
+                    &env,
+                    !rationale.is_empty() && rationale.len() <= 5000,
+                    "proposal rationale must be 1-5000 characters"
+                );
+            }
+        }
+
         let config_key = StorageKey::GovConfig;
         let config: GovConfig = env
             .storage()
@@ -2758,6 +2794,8 @@ impl LinkoraContract {
             created_ledger: env.ledger().sequence(),
             time_lock_ledgers: config.time_lock_ledgers,
             status: GovStatus::Active,
+            expiry_ledgers: config.proposal_expiry_ledgers,
+            metadata,
         };
 
         let proposal_key = StorageKey::GovProposal(id);
@@ -2823,6 +2861,43 @@ impl LinkoraContract {
             support,
         }
         .publish(&env);
+    }
+
+    /// Delegate governance voting power to another address (Issue #1664)
+    pub fn gov_delegate(env: Env, delegator: Address, delegate: Address) {
+        Self::bump_instance(&env);
+        Self::require_not_paused(&env, PauseModule::Governance);
+        delegator.require_auth();
+        validate_non_default_address(&env, "delegator", &delegator);
+        validate_non_default_address(&env, "delegate", &delegate);
+        require_with_error!(
+            &env,
+            delegator != delegate,
+            "cannot delegate to self"
+        );
+
+        let delegation_key = StorageKey::GovDelegation(delegator.clone());
+        env.storage().persistent().set(&delegation_key, &delegate);
+        Self::bump(&env, &delegation_key);
+    }
+
+    /// Revoke voting power delegation (Issue #1664)
+    pub fn gov_revoke_delegation(env: Env, delegator: Address) {
+        Self::bump_instance(&env);
+        delegator.require_auth();
+        validate_non_default_address(&env, "delegator", &delegator);
+
+        let delegation_key = StorageKey::GovDelegation(delegator.clone());
+        env.storage().persistent().remove(&delegation_key);
+    }
+
+    /// Get current delegate for a delegator, if any (Issue #1664)
+    pub fn gov_get_delegate(env: Env, delegator: Address) -> Option<Address> {
+        let delegation_key = StorageKey::GovDelegation(delegator);
+        env.storage()
+            .persistent()
+            .get(&delegation_key)
+            .ok()
     }
 
     pub fn effective_quorum(env: Env, proposal_id: u64) -> u32 {
