@@ -112,6 +112,7 @@ fn test_event_published_when_deploy_helper_called() {
 
     // Verify the event struct can be constructed with the expected fields.
     let _event = CreatorTokenDeployedEvent {
+        version: 1,
         deployer: deployer.clone(),
         token_address: token_address.clone(),
         name: String::from_str(&env, "My Token"),
@@ -145,4 +146,58 @@ fn test_update_token_wasm_rejects_zero_hash() {
 
     let zero_hash = BytesN::from_array(&env, &[0u8; 32]);
     client.update_token_wasm(&zero_hash);
+}
+
+// ── Metadata registry tests ───────────────────────────────────────────────────
+
+#[test]
+fn test_metadata_views_default_to_empty() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup(&env);
+
+    let token = Address::generate(&env);
+    let creator = Address::generate(&env);
+
+    assert!(client.get_token_metadata(&token).is_none());
+    assert_eq!(client.get_tokens_by_creator(&creator).len(), 0);
+}
+
+#[test]
+fn test_register_token_metadata_indexes_by_token_and_creator() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let factory_id = env.register(TokenFactoryContract, ());
+    let client = TokenFactoryContractClient::new(&env, &factory_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &dummy_wasm_hash(&env));
+
+    let creator = Address::generate(&env);
+    let t1 = Address::generate(&env);
+    let t2 = Address::generate(&env);
+    let name = String::from_str(&env, "Creator One");
+    let symbol = String::from_str(&env, "ONE");
+
+    env.as_contract(&factory_id, || {
+        register_token_metadata(&env, &creator, &t1, &name, &symbol, 7);
+        register_token_metadata(&env, &creator, &t2, &name, &symbol, 7);
+    });
+
+    let metadata = client.get_token_metadata(&t1).unwrap();
+    assert_eq!(metadata.token, t1);
+    assert_eq!(metadata.creator, creator);
+    assert_eq!(metadata.name, name);
+    assert_eq!(metadata.symbol, symbol);
+    assert_eq!(metadata.decimals, 7);
+    assert_eq!(metadata.deployed_ledger, env.ledger().sequence());
+
+    // Creator index preserves deployment order.
+    let tokens = client.get_tokens_by_creator(&creator);
+    assert_eq!(tokens.len(), 2);
+    assert_eq!(tokens.get(0).unwrap(), t1);
+    assert_eq!(tokens.get(1).unwrap(), t2);
+
+    // A different creator is not polluted by the first creator's deployments.
+    let other = Address::generate(&env);
+    assert_eq!(client.get_tokens_by_creator(&other).len(), 0);
 }
