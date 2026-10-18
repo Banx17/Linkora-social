@@ -11,6 +11,7 @@
 
 import { PgClientLike } from "./pipeline";
 import { IngestEvent, QueryResultLike } from "./pipeline";
+import { deadLetterEventsTotal } from "./metrics";
 import { handleFollow, handleUnfollow } from "./handlers/follow";
 import { handleTip } from "./handlers/tip";
 import { handleLike } from "./handlers/like";
@@ -176,20 +177,43 @@ export function createDomainProcessor(
       if (err instanceof MalformedEventValueError) {
         // The whole batch shares one DB transaction (see pipeline.ts), so
         // rethrowing here would roll back every event in the batch and,
-        // since the malformed event never advances, retry it forever. Log
-        // and skip just this event instead — its raw row is still recorded
-        // in `raw_events` and the cursor still advances.
+        // since the malformed event never advances, retry it forever. Log,
+        // route to dead-letter queue, and skip just this event instead.
+        const errorMsg = err.message;
         logger.warn(
           {
-            err: err.message,
+            err: errorMsg,
             rawValue: err.rawValue,
             ledgerSequence: event.ledgerSequence,
             eventIndex: event.eventIndex,
             contractId: event.contractId,
             topic: event.topic,
           },
-          "Skipping malformed event: could not parse numeric field"
+          "Routing malformed event to dead-letter queue"
         );
+
+        try {
+          await client.query(
+            `INSERT INTO dead_letter_events
+               (ledger_sequence, event_index, contract_id, topic, data, error_message)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (ledger_sequence, event_index) DO NOTHING`,
+            [
+              event.ledgerSequence,
+              event.eventIndex,
+              event.contractId,
+              event.topic,
+              JSON.stringify(event.data),
+              errorMsg,
+            ]
+          );
+          deadLetterEventsTotal.inc();
+        } catch (deadLetterErr) {
+          logger.error(
+            { err: deadLetterErr },
+            "Failed to insert malformed event into dead-letter queue"
+          );
+        }
         return;
       }
       throw err;

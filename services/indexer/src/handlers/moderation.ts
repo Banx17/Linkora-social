@@ -54,9 +54,6 @@ export async function handlePostReported(
     });
 
     console.log(`Post ${post_id} reported by ${reporter_address}: ${reason}`);
-
-    // TODO: Dispatch notification to post author
-    // await dispatchNotification(post_author, 'post_reported', { post_id, reason });
   } catch (error) {
     console.error(`Error handling PostReportedEvent for post ${post_id}:`, error);
     throw error;
@@ -87,9 +84,6 @@ export async function handleReportDismissed(
     console.log(
       `Report for post ${post_id} by ${reporter_address} dismissed by ${moderator_address}`
     );
-
-    // TODO: Dispatch notification to reporter
-    // await dispatchNotification(reporter_address, 'report_dismissed', { post_id, moderator_notes });
   } catch (error) {
     console.error(`Error handling ReportDismissedEvent for post ${post_id}:`, error);
     throw error;
@@ -125,9 +119,6 @@ export async function handlePostRemovedByModeration(
         moderator_address,
         reason
       );
-
-      // TODO: Dispatch notification to reporter
-      // await dispatchNotification(report.reporter_address, 'post_removed_by_moderation', { post_id, reason });
     }
 
     console.log(`Post ${post_id} removed by moderation (${moderator_address}): ${reason}`);
