@@ -240,6 +240,9 @@ pub struct GovProposal {
     pub created_ledger: u32,
     pub time_lock_ledgers: u32,
     pub status: GovStatus,
+    /// Proposal expiry window in ledgers from creation (Issue #1663).
+    /// Proposals cannot be executed after this window closes, preventing indefinite execution.
+    pub expiry_ledgers: u32,
 }
 
 #[contracttype]
@@ -250,6 +253,9 @@ pub struct GovConfig {
     pub vote_window_ledgers: u32,
     pub quorum_decay_rate_bps: u32,
     pub quorum_floor: u32,
+    /// Proposal expiry window in ledgers from creation (Issue #1663).
+    /// Prevents proposals from being executed indefinitely.
+    pub proposal_expiry_ledgers: u32,
 }
 
 #[contracttype]
@@ -2878,6 +2884,14 @@ impl LinkoraContract {
         assert!(
             (current_ledger as u64) >= execution_after,
             "time-lock not expired"
+        );
+
+        // Check proposal expiry window (Issue #1663).
+        // Proposals cannot be executed after their expiry window closes.
+        let expiry_deadline = proposal.created_ledger as u64 + proposal.expiry_ledgers as u64;
+        assert!(
+            (current_ledger as u64) < expiry_deadline,
+            "proposal has expired"
         );
 
         let total_votes = proposal.votes_for + proposal.votes_against;
