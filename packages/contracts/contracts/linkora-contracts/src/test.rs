@@ -8622,6 +8622,26 @@ fn test_verify_credential_max_depth_proof() {
 }
 
 #[test]
+#[should_panic(expected = "credential proof exceeds the maximum supported depth")]
+fn test_verify_credential_rejects_proof_deeper_than_maximum() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup_contract(&env);
+    let signing_key = credential_authority_signing_key(1);
+    client.set_credential_authority(&admin, &credential_authority_pubkey(&env, &signing_key));
+    let user = Address::generate(&env);
+    let leaf = BytesN::from_array(&env, &[1u8; 32]);
+    client.update_credential_root(&user, &leaf, &sign_credential_root(&env, &signing_key, &leaf));
+    let sibling = BytesN::from_array(&env, &[2u8; 32]);
+    let mut proof = Vec::new(&env);
+    for _ in 0..=MAX_CREDENTIAL_PROOF_DEPTH {
+        proof.push_back(sibling.clone());
+    }
+    let nullifier = BytesN::from_array(&env, &[11u8; 32]);
+    client.verify_credential(&user, &proof, &leaf, &nullifier);
+}
+
+#[test]
 fn test_update_credential_root_32_bytes_accepted() {
     let env = Env::default();
     env.mock_all_auths();

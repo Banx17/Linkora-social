@@ -31,7 +31,7 @@ pub enum StorageKey {
     AuthorPosts(Address),      // persistent: author -> Vec<u64> of post IDs
     Blocks(Address),           // persistent: blocker -> Map<Address, ()>
     UsernameIndex(String), // persistent: username -> owner Address (reverse index for uniqueness)
-    TipCooldown(u64, Address), // temporary: (post_id, tipper) -> last-tip ledger sequence number
+    TipCooldown(u64, Address, Address), // temporary: (post_id, tipper, token) -> last-tip ledger sequence number
     // ── Adjacency-set social graph (ADR-001) ──────────────────────────────
     Edge(Address, Address),         // persistent: (follower, followee) -> bool
     FollowingCount(Address),        // persistent: user -> u32 total following count
@@ -43,7 +43,8 @@ pub enum StorageKey {
     GraphMigrated(Address),         // persistent: user -> bool (migration tracking)
     DmPublicKey(Address),           // persistent: user -> X25519 public key for encrypted DMs
     CredentialRoot(Address),        // persistent: user -> credential Merkle root
-    NullifierSet(Address, BytesN<32>), // persistent: (user, nullifier) -> bool (prevents replay)
+    NullifierSet(Address, u32, BytesN<32>), // persistent: (user, credential epoch, nullifier)
+    CredentialEpoch(Address), // persistent: user -> credential root epoch
     CredentialAuthority, // persistent: Ed25519 pubkey trusted to sign credential root updates
     // ── Governance ────────────────────────────────────────────────────────
     GovProposal(u64),      // persistent: proposal_id -> GovProposal
@@ -55,6 +56,7 @@ pub enum StorageKey {
     AttestationNullifier(BytesN<32>), // persistent: sha256(report_cbor) -> bool (replay guard)
     Report(u64, Address), // persistent: (post_id, reporter) -> Report
     ReportCount(u64),  // persistent: post_id -> u32 count of reports
+    ReporterReputation(Address), // persistent: reporter -> bounded reputation score
 
     // ── Lazy Cleanup (Tombstones & Indexes) ───────────────────────────────
     DeletedPost(u64),              // persistent: post_id -> bool
@@ -125,6 +127,7 @@ const MAX_PAGINATION_LIMIT: u32 = 50;
 const MAX_BATCH_POST_SIZE: u32 = 10;
 /// Maximum raw post IDs scanned by `get_recent_posts` in one call.
 const MAX_RECENT_SCAN: u32 = 500;
+const MAX_CREDENTIAL_PROOF_DEPTH: u32 = 20;
 
 /// Maximum number of graph edges inspected by `get_suggested_follows` in one
 /// call, so discovery stays bounded regardless of how dense the graph is.
@@ -267,6 +270,7 @@ pub struct Report {
     pub reason_hash: BytesN<32>,
     pub created_ledger: u32,
     pub status: ReportStatus,
+    pub weight_bps: u32,
 }
 
 #[contracttype]
@@ -943,6 +947,11 @@ impl LinkoraContract {
         Self::bump_instance(&env);
         user.require_auth();
         validate_non_default_address(&env, "user", &user);
+        require_with_error!(
+            &env,
+            proof.len() <= MAX_CREDENTIAL_PROOF_DEPTH,
+            "credential proof exceeds the maximum supported depth"
+        );
         validate_non_default_address(&env, "creator_token", &creator_token);
         validate_username(&env, &username);
 
@@ -1273,6 +1282,10 @@ impl LinkoraContract {
         let key = StorageKey::CredentialRoot(user.clone());
         env.storage().persistent().set(&key, &new_root);
         Self::bump(&env, &key);
+        let epoch_key = StorageKey::CredentialEpoch(user.clone());
+        let epoch: u32 = env.storage().persistent().get(&epoch_key).unwrap_or(0);
+        env.storage().persistent().set(&epoch_key, &(epoch + 1));
+        Self::bump(&env, &epoch_key);
 
         CredentialRootUpdatedEvent { version: EVENT_VERSION, user,
             root: new_root,
@@ -1296,7 +1309,9 @@ impl LinkoraContract {
             return false;
         }
 
-        let nullifier_key = StorageKey::NullifierSet(user.clone(), nullifier.clone());
+        let epoch_key = StorageKey::CredentialEpoch(user.clone());
+        let epoch: u32 = env.storage().persistent().get(&epoch_key).unwrap_or(0);
+        let nullifier_key = StorageKey::NullifierSet(user.clone(), epoch, nullifier.clone());
         if env.storage().persistent().has(&nullifier_key) {
             return false;
         }
@@ -1316,6 +1331,30 @@ impl LinkoraContract {
 
         CredentialVerifiedEvent { version: EVENT_VERSION, user, nullifier }.publish(&env);
         true
+    }
+
+    /// Remove nullifiers from a superseded credential epoch. This is safe to
+    /// call permissionlessly because a nullifier in an old epoch can never be
+    /// accepted against the user's current credential root.
+    pub fn prune_nullifiers(
+        env: Env,
+        user: Address,
+        epoch: u32,
+        nullifiers: Vec<BytesN<32>>,
+    ) {
+        Self::bump_instance(&env);
+        validate_non_default_address(&env, "user", &user);
+        let current_epoch: u32 = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::CredentialEpoch(user.clone()))
+            .unwrap_or(0);
+        require_with_error!(&env, epoch < current_epoch, "credential epoch is still active");
+        require_with_error!(&env, nullifiers.len() <= 50, "too many nullifiers to prune");
+        for nullifier in nullifiers.iter() {
+            let key = StorageKey::NullifierSet(user.clone(), epoch, nullifier);
+            env.storage().persistent().remove(&key);
+        }
     }
 
     pub fn get_credential_root(env: Env, user: Address) -> Option<BytesN<32>> {
@@ -2037,10 +2076,10 @@ impl LinkoraContract {
         while tc_count > 0 && entries_removed < max_entries {
             tc_count -= 1;
             let idx_key = StorageKey::PostTipCooldownsIdx(post_id, tc_count);
-            if let Some(tipper) = env.storage().persistent().get::<_, Address>(&idx_key) {
+            if let Some((tipper, token)) = env.storage().persistent().get::<_, (Address, Address)>(&idx_key) {
                 env.storage()
                     .temporary()
-                    .remove(&StorageKey::TipCooldown(post_id, tipper));
+                    .remove(&StorageKey::TipCooldown(post_id, tipper, token));
                 env.storage().persistent().remove(&idx_key);
             }
             entries_removed += 1;
@@ -2199,7 +2238,7 @@ impl LinkoraContract {
         }
 
         // Check tip cooldown: one tip per tipper per post per cooldown window.
-        let cooldown_key = StorageKey::TipCooldown(post_id, tipper.clone());
+        let cooldown_key = StorageKey::TipCooldown(post_id, tipper.clone(), token.clone());
         let current_ledger = env.ledger().sequence();
         let cooldown_window: u32 = env
             .storage()
@@ -2226,7 +2265,7 @@ impl LinkoraContract {
             let tc_count_key = StorageKey::PostTipCooldownsCount(post_id);
             let count: u32 = env.storage().persistent().get(&tc_count_key).unwrap_or(0);
             let tc_idx_key = StorageKey::PostTipCooldownsIdx(post_id, count);
-            env.storage().persistent().set(&tc_idx_key, &tipper);
+            env.storage().persistent().set(&tc_idx_key, &(tipper.clone(), token.clone()));
             Self::bump(&env, &tc_idx_key);
             env.storage().persistent().set(&tc_count_key, &(count + 1));
             Self::bump(&env, &tc_count_key);
@@ -3177,6 +3216,9 @@ impl LinkoraContract {
 
         let count_key = StorageKey::ReportCount(post_id);
         let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
+        let reputation_key = StorageKey::ReporterReputation(reporter.clone());
+        let reputation: i32 = env.storage().persistent().get(&reputation_key).unwrap_or(0);
+        let weight_bps = (10_000i32 + reputation.saturating_mul(50)).clamp(5_000, 15_000) as u32;
 
         let rep_idx_key = StorageKey::PostReportersIdx(post_id, count);
         env.storage().persistent().set(&rep_idx_key, &reporter);
@@ -3193,6 +3235,7 @@ impl LinkoraContract {
             reason_hash,
             created_ledger: env.ledger().sequence(),
             status: ReportStatus::Pending,
+            weight_bps,
         };
         env.storage().persistent().set(&report_key, &report);
         Self::bump(&env, &report_key);
@@ -3538,6 +3581,24 @@ impl LinkoraContract {
         report.status = verdict;
         env.storage().persistent().set(&report_key, &report);
         Self::bump(&env, &report_key);
+        let reputation_key = StorageKey::ReporterReputation(report.reporter.clone());
+        let current: i32 = env.storage().persistent().get(&reputation_key).unwrap_or(0);
+        let next = match report.status {
+            ReportStatus::Upheld => current.saturating_add(1),
+            ReportStatus::Dismissed => current.saturating_sub(1),
+            ReportStatus::Pending => current,
+        }
+        .clamp(-100, 100);
+        env.storage().persistent().set(&reputation_key, &next);
+        Self::bump(&env, &reputation_key);
+    }
+
+    pub fn get_reporter_reputation(env: Env, reporter: Address) -> i32 {
+        validate_non_default_address(&env, "reporter", &reporter);
+        env.storage()
+            .persistent()
+            .get(&StorageKey::ReporterReputation(reporter))
+            .unwrap_or(0)
     }
 
     /// File an appeal against a moderation decision. Only the removed post's
@@ -4029,10 +4090,10 @@ impl LinkoraContract {
         let tc_count: u32 = env.storage().persistent().get(&tc_count_key).unwrap_or(0);
         for i in 0..tc_count {
             let idx_key = StorageKey::PostTipCooldownsIdx(post_id, i);
-            if let Some(tipper) = env.storage().persistent().get::<_, Address>(&idx_key) {
+            if let Some((tipper, token)) = env.storage().persistent().get::<_, (Address, Address)>(&idx_key) {
                 env.storage()
                     .temporary()
-                    .remove(&StorageKey::TipCooldown(post_id, tipper));
+                    .remove(&StorageKey::TipCooldown(post_id, tipper, token));
             }
             env.storage().persistent().remove(&idx_key);
         }
