@@ -144,9 +144,9 @@ export function FollowList({ address, type }: FollowListProps) {
       const isMockAddress = targetAddress.includes("XXXX") || currentUser.includes("XXXX");
       if (client.current && !isMockAddress) {
         if (isFollowing) {
-          client.current.unfollow(currentUser, targetAddress);
+          await client.current.unfollow(currentUser, targetAddress);
         } else {
-          client.current.follow(currentUser, targetAddress);
+          await client.current.follow(currentUser, targetAddress);
         }
       }
       await new Promise((r) => setTimeout(r, 600));

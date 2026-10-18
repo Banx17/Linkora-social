@@ -36,6 +36,10 @@ export function useMediaUpload() {
       setError(null);
       const fileArray = Array.from(files);
 
+      if (fileArray.length === 0) {
+        return;
+      }
+
       if (images.length + fileArray.length > MAX_MEDIA_COUNT) {
         setError(`You can upload a maximum of ${MAX_MEDIA_COUNT} images.`);
         return;
@@ -44,17 +48,24 @@ export function useMediaUpload() {
       // The server reports the authoritative byte budget. Files at or above it
       // must be rejected before any transfer starts, since the server caps the
       // upload and would otherwise truncate or 413.
-      const config = await fetchUploadConfig();
-      setMaxUploadBytes(config.max_upload_bytes);
+      let config;
+      try {
+        config = await fetchUploadConfig();
+        setMaxUploadBytes(config.max_upload_bytes);
+      } catch (err) {
+        setError("Failed to fetch upload configuration. Please try again.");
+        return;
+      }
 
       setIsCompressing(true);
       const newItems: MediaItem[] = [];
+      const failedValidations: string[] = [];
 
       try {
         for (const file of fileArray) {
           const validation = validateImageFile(file, config.max_upload_bytes);
           if (!validation.valid) {
-            setError(validation.error || "Invalid file.");
+            failedValidations.push(validation.error || "Invalid file.");
             continue;
           }
 
@@ -79,6 +90,11 @@ export function useMediaUpload() {
       }
 
       setIsCompressing(false);
+
+      // Report first validation error if any files failed validation
+      if (failedValidations.length > 0) {
+        setError(failedValidations[0]);
+      }
 
       if (newItems.length === 0) return;
 
