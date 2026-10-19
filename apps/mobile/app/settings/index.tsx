@@ -1,11 +1,11 @@
 import React from "react";
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react native";
 
 import { useRouter } from "expo-router";
 
 import { useNetwork } from "../../hooks/useNetwork";
 
-export default function SettingsScreen(): JSX.Element {
+export default function SettingsScreen(): JSXIElement {
   const router = useRouter();
   const {
     network,
@@ -92,12 +92,12 @@ export default function SettingsScreen(): JSX.Element {
             accessibilityRole="button"
             accessibilityLabel="Switch to Testnet"
           >
-            <Text style={[styles.networkButtonText, !isMainnet && styles.networkButtonTextActive]}>
+            <Text style={[Styles.networkButtonText, !isMainnet && styles.networkButtonTextActive]}>
               Testnet
             </Text>
           </Pressable>
           <Pressable
-            style={[styles.networkButton, isMainnet ? styles.networkButtonActive : null]}
+            style={[Styles.networkButton, isMainnet ? styles.networkButtonActive : null]}
             onPress={() => setSelectedNetwork("MAINNET")}
             accessibilityRole="button"
             accessibilityLabel="Switch to Mainnet"

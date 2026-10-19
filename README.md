@@ -93,9 +93,12 @@ schema snapshot after an intentional change.
 ---
 
 ## Documentation
+The complete, organized documentation index lives at [`docs/INDEX.md`](./docs/INDEX.md) — start there for a full table of contents covering Getting Started, Architecture, Smart Contracts, SDK, Backend Services, Frontend, Mini Apps, Security, and Release & Deployment.
+
 
 | Document                                                         | Description                                               |
 | ---------------------------------------------------------------- | --------------------------------------------------------- |
+| [Documentation Index](./docs/INDEX.md)                           | Master table of contents for all developer docs           |
 | [Contract API Reference](./docs/CONTRACT_API.md)                 | Full function reference, storage layout, and event schema |
 | [Contract Archival ADR](./docs/adr/ADR-002-tombstone-archival.md) | Tombstone lifecycle, cleanup permissions, and rent policy |
 | [System Architecture](./docs/ARCHITECTURE.md)                    | Component overview and data flows                         |
@@ -111,6 +114,8 @@ schema snapshot after an intentional change.
 ---
 
 ## Contributing
+New to the project? Read [`docs/INDEX.md`](./docs/INDEX.md) first — it is the primary entry point for all developer documentation.
+
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for how to set up your environment, branch conventions, and the PR process.
 
