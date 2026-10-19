@@ -95,6 +95,126 @@ const CONTRACT_ERROR_MAPPINGS: Record<string | number, string> = {
 
   [ContractErrorCode.SimulationFailed]: "Contract transaction simulation failed.",
   SimulationFailed: "Contract transaction simulation failed.",
+
+  [ContractErrorCode.NotInitialized]: "Contract has not been initialized yet.",
+  NotInitialized: "Contract has not been initialized yet.",
+
+  [ContractErrorCode.UsernameTooShort]: "Username must be at least 3 characters.",
+  UsernameTooShort: "Username must be at least 3 characters.",
+
+  [ContractErrorCode.ContentTooLong]: "Post content exceeds the 280-character limit.",
+  ContentTooLong: "Post content exceeds the 280-character limit.",
+
+  [ContractErrorCode.ContentEmpty]: "Post content cannot be empty.",
+  ContentEmpty: "Post content cannot be empty.",
+
+  [ContractErrorCode.NotBlocked]: "This user is not blocked.",
+  NotBlocked: "This user is not blocked.",
+
+  [ContractErrorCode.Unauthorized]: "You do not have permission to perform this action.",
+  Unauthorized: "You do not have permission to perform this action.",
+
+  [ContractErrorCode.PostNotFound]: "Post not found.",
+  PostNotFound: "Post not found.",
+
+  [ContractErrorCode.ProfileNotFound]: "Profile not found.",
+  ProfileNotFound: "Profile not found.",
+
+  [ContractErrorCode.PoolNotFound]: "Pool not found.",
+  PoolNotFound: "Pool not found.",
+
+  [ContractErrorCode.PoolExists]: "A pool with this name already exists.",
+  PoolExists: "A pool with this name already exists.",
+
+  [ContractErrorCode.InvalidThreshold]: "Invalid threshold value for pool signing.",
+  InvalidThreshold: "Invalid threshold value for pool signing.",
+
+  [ContractErrorCode.InsufficientSigners]: "Not enough signers to reach the required threshold.",
+  InsufficientSigners: "Not enough signers to reach the required threshold.",
+
+  [ContractErrorCode.UnauthorizedSigner]: "Signer is not authorized for this pool.",
+  UnauthorizedSigner: "Signer is not authorized for this pool.",
+
+  [ContractErrorCode.LowBalance]: "Pool balance is insufficient for this withdrawal.",
+  LowBalance: "Pool balance is insufficient for this withdrawal.",
+
+  [ContractErrorCode.WrongToken]: "Wrong token for this pool.",
+  WrongToken: "Wrong token for this pool.",
+
+  [ContractErrorCode.AlreadyPaused]: "Module is already paused.",
+  AlreadyPaused: "Module is already paused.",
+
+  [ContractErrorCode.NotPaused]: "Module is not paused.",
+  NotPaused: "Module is not paused.",
+
+  [ContractErrorCode.ContractPaused]: "This contract is currently paused.",
+  ContractPaused: "This contract is currently paused.",
+
+  [ContractErrorCode.AlreadyFollowing]: "You already follow this user.",
+  AlreadyFollowing: "You already follow this user.",
+
+  [ContractErrorCode.NotFollowing]: "You do not follow this user.",
+  NotFollowing: "You do not follow this user.",
+
+  [ContractErrorCode.SelfInteractionNotAllowed]: "You cannot perform this action on your own content.",
+  SelfInteractionNotAllowed: "You cannot perform this action on your own content.",
+
+  [ContractErrorCode.InvalidAmount]: "Invalid amount. Must be positive and within limits.",
+  InvalidAmount: "Invalid amount. Must be positive and within limits.",
+
+  [ContractErrorCode.TipCooldownActive]: "Tipping cooldown period is active. Please wait before trying again.",
+  TipCooldownActive: "Tipping cooldown period is active. Please wait before trying again.",
+
+  [ContractErrorCode.InvalidCooldown]: "Invalid cooldown window.",
+  InvalidCooldown: "Invalid cooldown window.",
+
+  [ContractErrorCode.GraphEntryExpired]: "Your follow graph entry has expired. Please pay rent first.",
+  GraphEntryExpired: "Your follow graph entry has expired. Please pay rent first.",
+
+  [ContractErrorCode.UnauthorizedRole]: "You do not have the required role for this operation.",
+  UnauthorizedRole: "You do not have the required role for this operation.",
+
+  [ContractErrorCode.PoolAdminNotFound]: "Address is not a pool admin.",
+  PoolAdminNotFound: "Address is not a pool admin.",
+
+  [ContractErrorCode.PoolAdminExists]: "Address is already a pool admin.",
+  PoolAdminExists: "Address is already a pool admin.",
+
+  [ContractErrorCode.ProposalNotFound]: "Proposal not found.",
+  ProposalNotFound: "Proposal not found.",
+
+  [ContractErrorCode.ProposalExpired]: "Proposal voting period has ended.",
+  ProposalExpired: "Proposal voting period has ended.",
+
+  [ContractErrorCode.TimeLockNotExpired]: "Proposal execution time lock has not expired yet.",
+  TimeLockNotExpired: "Proposal execution time lock has not expired yet.",
+
+  [ContractErrorCode.QuorumNotMet]: "Proposal did not reach quorum.",
+  QuorumNotMet: "Proposal did not reach quorum.",
+
+  [ContractErrorCode.AlreadyVoted]: "You have already voted on this proposal.",
+  AlreadyVoted: "You have already voted on this proposal.",
+
+  [ContractErrorCode.ReportNotFound]: "Report not found.",
+  ReportNotFound: "Report not found.",
+
+  [ContractErrorCode.InvalidVerdict]: "Invalid moderation verdict.",
+  InvalidVerdict: "Invalid moderation verdict.",
+
+  [ContractErrorCode.InvalidPostId]: "Invalid post ID.",
+  InvalidPostId: "Invalid post ID.",
+
+  [ContractErrorCode.ZeroAddress]: "Invalid address.",
+  ZeroAddress: "Invalid address.",
+
+  [ContractErrorCode.CannotRemoveLastAdmin]: "Cannot remove the last admin.",
+  CannotRemoveLastAdmin: "Cannot remove the last admin.",
+
+  [ContractErrorCode.CannotRemoveLastUpgrader]: "Cannot remove the last upgrader.",
+  CannotRemoveLastUpgrader: "Cannot remove the last upgrader.",
+
+  [ContractErrorCode.MathOverflow]: "Arithmetic overflow occurred.",
+  MathOverflow: "Arithmetic overflow occurred.",
 };
 
 /**
