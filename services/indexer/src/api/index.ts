@@ -14,6 +14,7 @@ import { createFollowsRouter } from "./routes/follows";
 import { createPoolsRouter } from "./routes/pools";
 import { createStateRootRouter } from "./routes/stateRoot";
 import { createNotificationsRouter } from "./routes/notifications";
+import { createNotificationInboxRouter } from "./routes/notificationInbox";
 import { createGovernanceRouter } from "./routes/governance";
 import { createUsersRouter } from "./routes/users";
 import { createFeedRouter } from "./routes/feed";
@@ -215,6 +216,10 @@ export function createApp(
   const notificationService = pg
     ? new NotificationService({ deviceTokenStore: new PostgresDeviceTokenStore(pg) })
     : defaultNotificationService;
+  if (pg) {
+    // Mounted before the device/preferences router so `/inbox/*` is matched here.
+    app.use("/api/notifications/inbox", createNotificationInboxRouter(pg));
+  }
   app.use("/api/notifications", createNotificationsRouter(notificationService));
 
   if (pg) {

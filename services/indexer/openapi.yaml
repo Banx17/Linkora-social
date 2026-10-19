@@ -741,6 +741,105 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/notifications/inbox/{address}:
+    get:
+      summary: List a recipient's notifications
+      operationId: listNotifications
+      tags: [Notifications]
+      security: []
+      description: >-
+        Follows of the recipient and likes/tips on their posts, newest first.
+        Derived from public on-chain data, so no signature is required. Pages use
+        an opaque composite `(created_at, id)` cursor; ids are stable
+        (`follow:<follower>`, `like:<post_id>:<liker>`, `tip:<tx_hash>`).
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^G[A-Z2-7]{55}$"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+          description: "`next_cursor` from the previous page."
+      responses:
+        "200":
+          description: A page of notifications.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [notifications, has_more, next_cursor]
+                properties:
+                  notifications:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, type, actor, created_at, read]
+                      properties:
+                        id:
+                          type: string
+                        type:
+                          type: string
+                          enum: [follow, like, tip]
+                        actor:
+                          type: string
+                        post_id:
+                          type: integer
+                          nullable: true
+                        amount:
+                          type: string
+                          nullable: true
+                          description: Tip amount in the token's base units.
+                        excerpt:
+                          type: string
+                          nullable: true
+                        created_at:
+                          type: string
+                          format: date-time
+                        read:
+                          type: boolean
+                  has_more:
+                    type: boolean
+                  next_cursor:
+                    type: string
+                    nullable: true
+        "400":
+          $ref: "#/components/responses/ValidationError"
+
+  /api/notifications/inbox/read-all:
+    post:
+      summary: Mark every notification as read
+      operationId: markAllNotificationsRead
+      tags: [Notifications]
+      description: >-
+        Requires a valid `StellarSig` header. Moves the caller's read watermark
+        to now; every notification at or before it is reported as read.
+      responses:
+        "200":
+          description: Watermark updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  read_through:
+                    type: string
+                    format: date-time
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   # ── State root ──────────────────────────────────────────────────────────────
   /api/state-root:
     get:

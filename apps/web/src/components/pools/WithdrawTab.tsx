@@ -6,6 +6,7 @@ import { formatTokenAmount, parseTokenAmount, STELLAR_KEY_RE } from "@/hooks/use
 import { useWithdraw } from "@/hooks/usePoolContract";
 import { TxStatusBanner } from "./TxStatusBanner";
 import { ThresholdBadge } from "./ThresholdBadge";
+import { PoolTxConfirmDialog } from "./PoolTxConfirmDialog";
 
 interface WithdrawTabProps {
   pool: PoolData;
@@ -16,11 +17,20 @@ interface WithdrawTabProps {
 
 const AMOUNT_RE = /^\d*\.?\d*$/;
 
+function safeParse(value: string, decimals: number): bigint {
+  try {
+    return parseTokenAmount(value, decimals);
+  } catch {
+    return BigInt(0);
+  }
+}
+
 export function WithdrawTab({ pool, tokenMeta, currentUser, onSuccess }: WithdrawTabProps) {
   const [amount, setAmount] = useState("");
   const [recipient, setRecipient] = useState(currentUser);
   const [amountError, setAmountError] = useState<string | null>(null);
   const [recipientError, setRecipientError] = useState<string | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const { status, result, error, withdraw, reset } = useWithdraw();
 
   const decimals = tokenMeta?.decimals ?? 7;
@@ -71,19 +81,24 @@ export function WithdrawTab({ pool, tokenMeta, currentUser, onSuccess }: Withdra
     if (recipientError) setRecipientError(validateRecipient(val));
   };
 
+  // Validating opens the confirmation summary; only confirming it reaches the wallet (#1634).
   const handleSubmit = useCallback(
-    async (e: React.FormEvent) => {
+    (e: React.FormEvent) => {
       e.preventDefault();
       const aErr = validateAmount(amount);
       const rErr = validateRecipient(recipient);
       setAmountError(aErr);
       setRecipientError(rErr);
       if (aErr || rErr) return;
-
-      await withdraw(signers, pool.pool_id, amount, decimals, recipient.trim());
+      setConfirmOpen(true);
     },
-    [amount, recipient, validateAmount, withdraw, signers, pool.pool_id, decimals]
+    [amount, recipient, validateAmount]
   );
+
+  const handleConfirm = useCallback(async () => {
+    setConfirmOpen(false);
+    await withdraw(signers, pool.pool_id, amount, decimals, recipient.trim());
+  }, [amount, recipient, withdraw, signers, pool.pool_id, decimals]);
 
   const handleReset = () => {
     reset();
@@ -160,6 +175,26 @@ export function WithdrawTab({ pool, tokenMeta, currentUser, onSuccess }: Withdra
           </div>
         )}
       </div>
+
+      <PoolTxConfirmDialog
+        open={confirmOpen}
+        onConfirm={() => void handleConfirm()}
+        onCancel={() => setConfirmOpen(false)}
+        summary={{
+          action: "withdraw",
+          amount: amount ? formatTokenAmount(safeParse(amount, decimals), decimals) : "0",
+          symbol,
+          decimals,
+          token: pool.token,
+          poolId: pool.pool_id,
+          threshold: pool.threshold,
+          adminCount: pool.admins.length,
+          recipient: recipient.trim(),
+          resultingBalance: amount
+            ? formatTokenAmount(pool.balance - safeParse(amount, decimals), decimals)
+            : undefined,
+        }}
+      />
 
       {status === "success" ? null : (
         <form onSubmit={handleSubmit} style={styles.form} noValidate>

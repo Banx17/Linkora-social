@@ -1,3 +1,4 @@
+import { Asset } from "@stellar/stellar-base";
 import { fetchWithTimeout } from "./utils/fetch.js";
 import { NetworkError, ValidationError } from "./errors.js";
 
@@ -24,6 +25,26 @@ export interface ClassicAccountConfig {
 }
 
 const DEFAULT_NETWORK = "Test SDF Network ; September 2015";
+
+/**
+ * Contract ID of the Stellar Asset Contract (SAC) that wraps a classic Horizon
+ * balance, i.e. the token address Soroban contracts such as Linkora's `tip`
+ * expect. Native XLM maps to the native SAC. Returns `null` for balances that
+ * have no SAC (liquidity-pool shares) or lack an asset code/issuer.
+ */
+export function stellarAssetContractId(
+  balance: Pick<ClassicBalance, "asset_type" | "asset_code" | "asset_issuer">,
+  networkPassphrase: string = DEFAULT_NETWORK
+): string | null {
+  if (balance.asset_type === "native") return Asset.native().contractId(networkPassphrase);
+  if (balance.asset_type === "liquidity_pool_shares") return null;
+  if (!balance.asset_code || !balance.asset_issuer) return null;
+  try {
+    return new Asset(balance.asset_code, balance.asset_issuer).contractId(networkPassphrase);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Resolve the appropriate Horizon URL based on network passphrase and config options.

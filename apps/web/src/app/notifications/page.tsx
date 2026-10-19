@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import { useNotifications, Notification } from "@/hooks/useNotifications";
 import { useWalletContext } from "@/components/WalletProvider";
@@ -142,8 +141,19 @@ function groupByDate(notifications: Notification[]): DateGroup[] {
 
 export default function NotificationsPage() {
   const { address, connected } = useWalletContext();
-  const { notifications, hasMore, markAllRead, markRead, loadMore } = useNotifications();
-  const [markAllReadClicked, setMarkAllReadClicked] = useState(false);
+  const {
+    notifications,
+    hasMore,
+    unreadCount,
+    status,
+    error,
+    markAllPending,
+    markAllError,
+    markAllRead,
+    markRead,
+    loadMore,
+    retry,
+  } = useNotifications();
 
   if (!connected || !address) {
     return (
@@ -154,26 +164,61 @@ export default function NotificationsPage() {
   }
 
   const groups = groupByDate(notifications);
+  const initialLoading = status === "loading" && notifications.length === 0;
+  const initialError = status === "error" && notifications.length === 0;
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-6 md:py-8">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-bold text-[var(--foreground)]">Notifications</h1>
-        {notifications.length > 0 && !markAllReadClicked && (
+        {unreadCount > 0 && (
           <button
-            onClick={() => {
-              markAllRead();
-              setMarkAllReadClicked(true);
-            }}
-            className="text-sm font-medium text-violet-400 hover:text-violet-300 transition-colors"
+            type="button"
+            onClick={() => void markAllRead()}
+            disabled={markAllPending}
+            className="text-sm font-medium text-violet-400 hover:text-violet-300 transition-colors disabled:opacity-60"
             data-testid="mark-all-read"
           >
-            Mark all read
+            {markAllPending ? "Marking…" : "Mark all as read"}
           </button>
         )}
       </div>
 
-      {notifications.length === 0 ? (
+      {markAllError && (
+        <p
+          role="alert"
+          className="mb-4 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2 text-sm text-red-300"
+          data-testid="mark-all-error"
+        >
+          {markAllError}. Your notifications were left unread.
+        </p>
+      )}
+
+      {initialLoading ? (
+        <ul className="flex flex-col gap-3" aria-busy="true" aria-label="Loading notifications">
+          {[0, 1, 2].map((i) => (
+            <li
+              key={i}
+              className="h-16 animate-pulse rounded-xl border border-[var(--border)] bg-[var(--muted)]/40"
+            />
+          ))}
+        </ul>
+      ) : initialError ? (
+        <div
+          role="alert"
+          className="rounded-xl border border-red-500/40 bg-red-500/10 px-6 py-10 text-center"
+          data-testid="error-state"
+        >
+          <p className="mb-4 text-sm text-red-300">{error}</p>
+          <button
+            type="button"
+            onClick={retry}
+            className="rounded-lg border border-[var(--border)] px-5 py-2 text-sm font-medium text-[var(--foreground)] hover:border-violet-500/60"
+          >
+            Try again
+          </button>
+        </div>
+      ) : notifications.length === 0 ? (
         <div
           className="rounded-xl border border-[var(--border)] bg-[var(--muted)]/40 px-6 py-12 text-center"
           data-testid="empty-state"
@@ -199,14 +244,28 @@ export default function NotificationsPage() {
             ))}
           </div>
 
-          {hasMore && (
+          {status === "error" && (
+            <div
+              role="alert"
+              className="mt-6 flex items-center justify-center gap-3 text-sm text-red-300"
+            >
+              <span>{error}</span>
+              <button type="button" onClick={retry} className="font-medium underline">
+                Retry
+              </button>
+            </div>
+          )}
+
+          {hasMore && status !== "error" && (
             <div className="mt-6 flex justify-center">
               <button
+                type="button"
                 onClick={loadMore}
-                className="rounded-lg border border-[var(--border)] px-5 py-2 text-sm font-medium text-[var(--text-muted)] hover:border-violet-500/60 hover:text-violet-400 transition-colors"
+                disabled={status === "loading-more"}
+                className="rounded-lg border border-[var(--border)] px-5 py-2 text-sm font-medium text-[var(--text-muted)] hover:border-violet-500/60 hover:text-violet-400 transition-colors disabled:opacity-60"
                 data-testid="load-more"
               >
-                Load more
+                {status === "loading-more" ? "Loading…" : "Load more"}
               </button>
             </div>
           )}
