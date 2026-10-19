@@ -97,6 +97,7 @@ schema snapshot after an intentional change.
 | Document                                                         | Description                                               |
 | ---------------------------------------------------------------- | --------------------------------------------------------- |
 | [Contract API Reference](./docs/CONTRACT_API.md)                 | Full function reference, storage layout, and event schema |
+| [Contract Deployment Guide](./docs/DEPLOYMENT_GUIDE.md)          | Step-by-step testnet/futurenet deployment, upgrades, and troubleshooting |
 | [Contract Archival ADR](./docs/adr/ADR-002-tombstone-archival.md) | Tombstone lifecycle, cleanup permissions, and rent policy |
 | [System Architecture](./docs/ARCHITECTURE.md)                    | Component overview and data flows                         |
 | [Design System](./docs/design/README.md)                         | UI/UX specifications and brand identity                   |
@@ -107,6 +108,7 @@ schema snapshot after an intentional change.
 | [Mini Apps Developer Guide](./docs/mini-apps/DEVELOPER_GUIDE.md) | Build and submit a Linkora mini app                       |
 | [Mini Apps Bridge API](./docs/mini-apps/BRIDGE_API.md)           | Bridge method reference                                   |
 | [Security Policy](./SECURITY.md)                                 | Vulnerability disclosure guidance                         |
+| [Security Audit Reference](./docs/SECURITY_AUDIT.md)            | Threat model, pre-deployment checklist, and incident response runbook |
 
 ---
 
