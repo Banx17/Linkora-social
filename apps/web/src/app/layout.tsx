@@ -11,6 +11,7 @@ import { ThemeProvider } from "@/contexts/ThemeContext";
 import { KeyboardShortcutsProvider } from "@/contexts/KeyboardShortcutsContext";
 import { KeyboardShortcutsModal } from "@/components/KeyboardShortcutsModal";
 import { ServiceWorkerRegistration } from "@/components/ServiceWorkerRegistration";
+import { ResourceHints, ThirdPartyScripts } from "@/components/ThirdPartyScripts";
 
 export const metadata: Metadata = {
   title: "Linkora",
@@ -68,8 +69,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             __html: `(function(){try{var t=localStorage.getItem('linkora_theme');if(t!=='light'&&t!=='dark'){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}document.documentElement.dataset.theme=t;}catch(e){document.documentElement.dataset.theme='light';}})();`,
           }}
         />
+        {/* Connection hints for the RPC / indexer origins */}
+        <ResourceHints />
       </head>
       <body suppressHydrationWarning>
+        {/* Third-party scripts, each pinned to its lowest usable priority */}
+        <ThirdPartyScripts />
         <ServiceWorkerRegistration />
         <a
           href="#main-content"

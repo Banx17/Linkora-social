@@ -43,11 +43,26 @@ const blockieUrl = (address: string) => `https://effigy.im/a/${address}.svg`;
 const truncate = (addr: string) =>
   addr.length > 10 ? `${addr.slice(0, 5)}…${addr.slice(-4)}` : addr;
 
-/** Relative time label from a ledger number (≈5 s / ledger). */
-const ledgerToRelative = (ledger: number): string => {
-  // We can't know the *exact* wall-clock time without the network, so we
-  // just show the ledger number for now.
-  return `Ledger #${ledger}`;
+/** Close time per ledger. */
+const SECONDS_PER_LEDGER = 5;
+
+/**
+ * Relative time label from a ledger number (≈5 s / ledger).
+ *
+ * When the current ledger is not known (e.g. the indexer did not report it),
+ * we fall back to displaying the ledger number itself.
+ */
+export const ledgerToRelative = (ledger: number, currentLedger?: number): string => {
+  if (!currentLedger || !ledger || ledger >= currentLedger) {
+    return currentLedger ? "just now" : `Ledger #${ledger}`;
+  }
+
+  const seconds = (currentLedger - ledger) * SECONDS_PER_LEDGER;
+
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 60 * 60) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 60 * 60 * 24) return `${Math.floor(seconds / (60 * 60))}h ago`;
+  return `${Math.floor(seconds / (60 * 60 * 24))}d ago`;
 };
 
 /* ────────────────────────────────────────────────────────────────────────── */
