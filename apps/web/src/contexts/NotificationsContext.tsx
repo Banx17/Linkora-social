@@ -262,9 +262,11 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
           const timestamp = data.ledgerClosedAt ?? new Date().toISOString();
           const eventId = data.pagingToken ?? `${type}-${Date.now()}`;
 
+          // Ids match the indexer inbox (GET /api/notifications/inbox/:address)
+          // so a fetched page never duplicates an item that arrived live (#1632).
           if (type === "follow" && data.followee === address) {
             addInboxNotification({
-              id: eventId,
+              id: `follow:${data.follower}`,
               type: "follow",
               actor: data.follower,
               timestamp,
@@ -273,7 +275,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
           } else if (type === "like" && data.user !== address) {
             const excerpt = await fetchPostExcerpt(data.post_id);
             addInboxNotification({
-              id: eventId,
+              id: `like:${data.post_id}:${data.user}`,
               type: "like",
               actor: data.user,
               postId: data.post_id,
@@ -284,7 +286,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
           } else if (type === "tip" && data.tipper !== address) {
             const excerpt = await fetchPostExcerpt(data.post_id);
             addInboxNotification({
-              id: eventId,
+              id: data.txHash ? `tip:${data.txHash}` : eventId,
               type: "tip",
               actor: data.tipper,
               postId: data.post_id,
