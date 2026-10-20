@@ -16,9 +16,12 @@ export function applyThemePreference(theme: ThemePreference) {
 }
 
 export function getStoredThemePreference(): ThemePreference {
-  const stored = localStorage.getItem(THEME_STORAGE_KEY);
+  // Called during SSR by ThemeProvider's initial reducer state; `localStorage`
+  // does not exist on the server.
+  if (typeof window === "undefined") return "light";
+  const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
   if (isThemePreference(stored)) return stored;
-  if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+  if (typeof window.matchMedia === "function") {
     return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   }
   return "light";
