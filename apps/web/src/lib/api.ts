@@ -190,49 +190,130 @@ export async function fetchUploadConfig(): Promise<MediaUploadConfig> {
  * / partial writes) as typed errors so the composer can display them.
  */
 export async function uploadMediaFile(file: File): Promise<{ url: string; size: number }> {
+  return uploadMediaFileWithProgress(file);
+}
+
+export type UploadProgress = number; // 0-100
+
+export async function uploadMediaFileWithProgress(
+  file: File,
+  onProgress?: (progress: UploadProgress) => void
+): Promise<{ url: string; size: number }> {
   const form = new FormData();
   form.append("file", file, file.name);
 
-  let res: Response;
-  try {
-    res = await fetch(`${INDEXER_URL}/api/posts/media`, {
-      method: "POST",
-      body: form,
-    });
-  } catch {
-    throw new MediaUploadError(
-      "Network error while uploading media. Please try again.",
-      "NETWORK_ERROR",
-      0
-    );
-  }
-
-  if (res.status === 413) {
-    throw new MediaUploadError(
-      "Upload is too large for the server and was rejected. Choose a smaller image.",
-      "PAYLOAD_TOO_LARGE",
-      413
-    );
-  }
-
-  if (res.status === 415) {
-    throw new MediaUploadError(
-      "This file type is not supported. Accepted formats: JPG, PNG, WebP.",
-      "UNSUPPORTED_MEDIA_TYPE",
-      415
-    );
-  }
-
-  if (!res.ok) {
-    let message = "The server could not save this media. Please try again.";
+  // If no progress callback, fall back to fetch (works fine)
+  if (!onProgress) {
+    let res: Response;
     try {
-      const body = await res.json();
-      if (body?.error?.message) message = body.error.message;
+      res = await fetch(`${INDEXER_URL}/api/posts/media`, {
+        method: "POST",
+        body: form,
+      });
     } catch {
-      /* non-JSON error body — fall back to the generic message */
+      throw new MediaUploadError(
+        "Network error while uploading media. Please try again.",
+        "NETWORK_ERROR",
+        0
+      );
     }
-    throw new MediaUploadError(message, "UPLOAD_FAILED", res.status);
+
+    if (res.status === 413) {
+      throw new MediaUploadError(
+        "Upload is too large for the server and was rejected. Choose a smaller image.",
+        "PAYLOAD_TOO_LARGE",
+        413
+      );
+    }
+
+    if (res.status === 415) {
+      throw new MediaUploadError(
+        "This file type is not supported. Accepted formats: JPG, PNG, WebP.",
+        "UNSUPPORTED_MEDIA_TYPE",
+        415
+      );
+    }
+
+    if (!res.ok) {
+      let message = "The server could not save this media. Please try again.";
+      try {
+        const body = await res.json();
+        if (body?.error?.message) message = body.error.message;
+      } catch {
+        /* non-JSON error body — fall back to the generic message */
+      }
+      throw new MediaUploadError(message, "UPLOAD_FAILED", res.status);
+    }
+
+    return res.json();
   }
 
-  return res.json();
+  // Use XHR for progress
+  return new Promise<{ url: string; size: number }>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${INDEXER_URL}/api/posts/media`);
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        const pct = Math.round((event.loaded / event.total) * 100);
+        onProgress(Math.min(100, Math.max(0, pct)));
+      }
+    };
+
+    xhr.onerror = () => {
+      reject(
+        new MediaUploadError(
+          "Network error while uploading media. Please try again.",
+          "NETWORK_ERROR",
+          0
+        )
+      );
+    };
+
+    xhr.onload = () => {
+      const res = xhr;
+      const status = res.status;
+      if (status === 413) {
+        reject(
+          new MediaUploadError(
+            "Upload is too large for the server and was rejected. Choose a smaller image.",
+            "PAYLOAD_TOO_LARGE",
+            413
+          )
+        );
+        return;
+      }
+      if (status === 415) {
+        reject(
+          new MediaUploadError(
+            "This file type is not supported. Accepted formats: JPG, PNG, WebP.",
+            "UNSUPPORTED_MEDIA_TYPE",
+            415
+          )
+        );
+        return;
+      }
+      if (status < 200 || status >= 300) {
+        let message = "The server could not save this media. Please try again.";
+        try {
+          const body = JSON.parse(res.responseText);
+          if (body?.error?.message) message = body.error.message;
+        } catch {
+          /* ignore */
+        }
+        reject(new MediaUploadError(message, "UPLOAD_FAILED", status));
+        return;
+      }
+      try {
+        const data = JSON.parse(res.responseText);
+        resolve(data);
+      } catch (e) {
+        reject(
+          new MediaUploadError("The server returned an invalid response.", "UPLOAD_FAILED", status)
+        );
+      }
+    };
+
+    xhr.send(form);
+  });
 }
