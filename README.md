@@ -107,6 +107,7 @@ schema snapshot after an intentional change.
 | [Indexer Migrations](./services/indexer/migrations/README.md)    | Migration rules, reversibility policy, and testing        |
 | [Mini Apps Developer Guide](./docs/mini-apps/DEVELOPER_GUIDE.md) | Build and submit a Linkora mini app                       |
 | [Mini Apps Bridge API](./docs/mini-apps/BRIDGE_API.md)           | Bridge method reference                                   |
+| [Mini Apps Submission Guide](./docs/mini-apps/SUBMISSION_GUIDE.md) | Submission, security review, publication, and revocation |
 | [Security Policy](./SECURITY.md)                                 | Vulnerability disclosure guidance                         |
 
 ---
