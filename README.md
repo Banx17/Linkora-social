@@ -109,6 +109,7 @@ schema snapshot after an intentional change.
 | [Mini Apps Developer Guide](./docs/mini-apps/DEVELOPER_GUIDE.md) | Build and submit a Linkora mini app                       |
 | [Mini Apps Bridge API](./docs/mini-apps/BRIDGE_API.md)           | Bridge method reference                                   |
 | [Security Policy](./SECURITY.md)                                 | Vulnerability disclosure guidance                         |
+| [Security Audit Reference](./docs/SECURITY_AUDIT.md)            | Threat model, pre-deployment checklist, and incident response runbook |
 
 ---
 
