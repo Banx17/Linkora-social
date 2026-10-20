@@ -1,16 +1,18 @@
 'use client';
 
-import { ProfileForm, ProfileFormValues } from '@/components/forms/ProfileForm';
+/**
+ * Profile edit page.
+ *
+ * The Server Action is wired directly to ProfileForm via its `action` prop —
+ * this page only needs to pass the wallet address so the action can identify
+ * the user.  No `onSubmit` handler, no client-side fetch.
+ */
+
+import { ProfileForm } from '@/components/forms/ProfileForm';
 import { useWallet } from '@/hooks/useWallet';
 
 export default function ProfileEditPage() {
   const { address, connected } = useWallet();
-
-  async function handleSubmit(values: ProfileFormValues) {
-    if (!address) return;
-    // TODO: call contract set_profile(address, values.username, values.creatorToken || address)
-    console.log('set_profile', { address, ...values });
-  }
 
   if (!connected || !address) {
     return (
@@ -23,7 +25,7 @@ export default function ProfileEditPage() {
   return (
     <div className="container mx-auto px-4 py-8 max-w-md">
       <h1 className="text-2xl font-bold mb-6">Edit Profile</h1>
-      <ProfileForm onSubmit={handleSubmit} />
+      <ProfileForm address={address} />
     </div>
   );
 }
