@@ -27,6 +27,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useWallet } from "@/hooks/useWallet";
+import { useFeatureFlag } from "@/lib/featureFlags";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -97,6 +98,7 @@ function isEditableTarget(event: KeyboardEvent): boolean {
 export function KeyboardShortcutsProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const { address } = useWallet();
+  const commandPaletteEnabled = useFeatureFlag("command-palette");
 
   const [isHelpModalOpen, setIsHelpModalOpen] = useState(false);
 
@@ -219,6 +221,7 @@ export function KeyboardShortcutsProvider({ children }: { children: React.ReactN
   // ── Attach / detach listener ─────────────────────────────────────────────
 
   useEffect(() => {
+    if (!commandPaletteEnabled) return;
     // capture: true ensures we see the event before React's synthetic system,
     // which matters for Escape already handled by modals lower in the tree.
     window.addEventListener("keydown", handleKeyDown, { capture: true });
@@ -226,7 +229,7 @@ export function KeyboardShortcutsProvider({ children }: { children: React.ReactN
       window.removeEventListener("keydown", handleKeyDown, { capture: true });
       clearSequence();
     };
-  }, [handleKeyDown, clearSequence]);
+  }, [handleKeyDown, clearSequence, commandPaletteEnabled]);
 
   // ── Context value ────────────────────────────────────────────────────────
 
