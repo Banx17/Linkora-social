@@ -19,6 +19,7 @@ import {
 
 import { Logo } from "@/components/branding/Logo";
 import { NotificationBell } from "@/components/NotificationBell";
+import { useFeatureFlag } from "@/lib/featureFlags";
 
 
 /** Truncates a Stellar address to G…XXXX format */
@@ -36,6 +37,9 @@ export function NavBar() {
   const [isWalletModalOpen, setIsWalletModalOpen] = useState(false);
   const [showFreighterBanner, setShowFreighterBanner] = useState(false);
   const [theme, setTheme] = useState<ThemePreference>("light");
+
+  const darkModeEnabled = useFeatureFlag("dark-mode-toggle");
+  const commandPaletteEnabled = useFeatureFlag("command-palette");
 
   // Ref forwarded to SearchBar so the '/' shortcut can focus the input
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -130,6 +134,7 @@ export function NavBar() {
         <div className="flex items-center gap-2 sm:gap-3">
           {connected && (
             <div className="hidden md:flex items-center gap-3">
+              {darkModeEnabled && (
               <button
                 onClick={toggleTheme}
                 className="rounded-lg p-1.5 text-[var(--text-muted)] hover:text-violet-400 transition-colors"
@@ -170,6 +175,7 @@ export function NavBar() {
                   </svg>
                 )}
               </button>
+              )}
               <Link
                 href="/analytics"
                 className="rounded-lg p-1.5 text-[var(--text-muted)] hover:text-violet-400 transition-colors"
@@ -215,6 +221,7 @@ export function NavBar() {
                   />
                 </svg>
               </Link>
+              {commandPaletteEnabled && (
               <button
                 onClick={openHelpModal}
                 className="rounded-lg p-1.5 text-[var(--text-muted)] hover:text-violet-400 transition-colors"
@@ -238,6 +245,7 @@ export function NavBar() {
                   />
                 </svg>
               </button>
+              )}
               <NotificationBell />
             </div>
           )}
