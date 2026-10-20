@@ -195,6 +195,29 @@ describe("FollowList — row interactivity", () => {
   });
 });
 
+describe("FollowList — verification badges", () => {
+  it("renders a verification badge next to verified followers", async () => {
+    mockFetch([
+      {
+        address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA1",
+        username: "alice",
+        isVerified: true,
+      },
+      { address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2", username: "bob" },
+    ]);
+    renderFollowList();
+    await waitFor(() => expect(screen.getByText("@alice")).toBeInTheDocument());
+
+    expect(screen.getAllByTestId("verification-badge")).toHaveLength(1);
+  });
+
+  it("shows no verification badges when nobody is verified", async () => {
+    renderFollowList();
+    await waitFor(() => expect(screen.getByText("@alice")).toBeInTheDocument());
+    expect(screen.queryAllByTestId("verification-badge")).toHaveLength(0);
+  });
+});
+
 describe("FollowList — accessibility (jest-axe)", () => {
   it("reports no axe violations for the followers list", async () => {
     const { container } = renderFollowList("followers");

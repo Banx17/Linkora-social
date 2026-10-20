@@ -5,10 +5,15 @@ import Link from "next/link";
 import { LinkoraClient } from "linkora-sdk";
 import { OptimisticStore } from "@/lib/optimisticStore";
 import { AnimatedList } from "@/components/AnimatedList";
+import { VerificationBadge, type VerificationLevel } from "@/components/VerificationBadge";
 
 export interface FollowUser {
   address: string;
   username: string;
+  /** Whether the account holds an on-chain attestation. */
+  isVerified?: boolean;
+  /** Provenance of the account's verification, when verified. */
+  verificationLevel?: VerificationLevel | null;
 }
 
 interface FollowListProps {
@@ -246,12 +251,20 @@ export function FollowList({ address, type }: FollowListProps) {
                   className="h-10 w-10 flex-shrink-0 rounded-full border border-[var(--border)]"
                 />
                 <div className="min-w-0 flex-1">
-                  <Link
-                    href={`/profile/${user.address}`}
-                    className="block truncate font-semibold text-[var(--foreground)] hover:text-[var(--accent)]"
-                  >
-                    @{user.username}
-                  </Link>
+                  <span className="flex items-center gap-1.5">
+                    <Link
+                      href={`/profile/${user.address}`}
+                      className="block truncate font-semibold text-[var(--foreground)] hover:text-[var(--accent)]"
+                    >
+                      @{user.username}
+                    </Link>
+                    {user.isVerified && (
+                      <VerificationBadge
+                        level={user.verificationLevel ?? "identity"}
+                        subject={`@${user.username}`}
+                      />
+                    )}
+                  </span>
                   <span className="block truncate font-mono text-xs text-[var(--text-muted)]">
                     {formatAddress(user.address)}
                   </span>

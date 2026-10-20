@@ -42,6 +42,8 @@ jest.mock("@/hooks/useProfile", () => ({
         postsHasMore: false,
         creatorTokenBalance: "100",
         totalTipsReceived: 500,
+        isVerified: true,
+        verificationLevel: "identity",
       },
     },
     refetch: jest.fn(),
@@ -145,5 +147,18 @@ describe("ProfilePage Accessibility", () => {
     const { container } = render(<ProfilePage />);
     const section = container.querySelector('[aria-label="Profile header"]');
     expect(section).toBeTruthy();
+  });
+
+  it("shows a verification badge whose provenance is exposed to assistive tech", () => {
+    const { getByTestId } = render(<ProfilePage />);
+    const badge = getByTestId("verification-badge");
+    expect(badge).toBeTruthy();
+
+    const icon = badge.querySelector('[role="img"]');
+    expect(icon).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("Identity verified via Stellar attestation")
+    );
+    expect(icon).toHaveAttribute("title", "Identity verified via Stellar attestation");
   });
 });

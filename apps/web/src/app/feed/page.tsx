@@ -3,29 +3,37 @@
 /**
  * /feed — main feed page with "For You" and "Following" tabs.
  *
- * Fix for issue #1580:
- *  - Removed the broken Server Component shell that referenced undeclared
- *    identifiers (followingRes, allFetchedPosts) and non-existent modules
- *    (@/lib/auth, @/lib/persist, @/lib/posts, @/lib/following, @/constants,
- *    @/config.indexerUrl).
- *  - Replaced with a client component that owns both feed tabs and performs
- *    the fan-out fetch correctly (Promise.all awaited and consumed).
- *  - setPosts / persistFeed called exactly once per successful fetch.
- *  - Cursor is kept independently per tab so switching tabs does not reset
- *    the other tab's pagination state.
+ * Issue #1736: the first paint no longer blocks on the indexer. Each tab is a
+ * small stream component that reads its snapshot with React 19's `use()` hook,
+ * so React renders a skeleton fallback (a `<Suspense>` boundary) while the
+ * request is in flight and swaps in post cards as soon as it resolves.
+ *
+ * Behaviour preserved from the #1580 rewrite:
+ *  - Switching tabs shows only the active tab's posts.
+ *  - A missing wallet address shows a helpful error on the Following tab.
+ *  - Pagination ("Load more") appends to the current tab's list.
  */
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { Suspense, use, useCallback, useState } from "react";
 import { useWallet } from "@/hooks/useWallet";
 import { PostCard, PostCardSkeleton, type Post } from "@/components/PostCard";
 import { FeedSkeleton } from "@/components/skeletons";
 
-const INDEXER_URL = process.env.NEXT_PUBLIC_INDEXER_URL ?? "http://localhost:3001";
-const PAGE_SIZE = 20;
+/** Skeleton shown by the `<Suspense>` boundary while a tab streams in. */
+function FeedSkeleton() {
+  return (
+    <div data-testid="loading-indicator" className="space-y-4">
+      <PostCardSkeleton />
+      <PostCardSkeleton />
+      <PostCardSkeleton />
+    </div>
+  );
+}
 
-type FeedTab = "for-you" | "following";
+const ERROR_CLASS =
+  "mb-4 rounded-lg border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-400";
 
-interface FeedState {
+interface LoadMoreState {
   posts: Post[];
   cursor: string | null;
   hasMore: boolean;
@@ -33,161 +41,98 @@ interface FeedState {
   error: string | null;
 }
 
-const EMPTY_FEED: FeedState = {
-  posts: [],
-  cursor: null,
-  hasMore: true,
-  loading: false,
-  error: null,
-};
-
-// ---------------------------------------------------------------------------
-// Data-fetching helpers
-// ---------------------------------------------------------------------------
-
-/** Fetch the global / "For You" feed from the indexer. */
-async function fetchForYouPage(cursor: string | null): Promise<{
-  posts: Post[];
-  nextCursor: string | null;
-}> {
-  const cursorQuery = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
-  const res = await fetch(
-    `${INDEXER_URL}/api/posts?limit=${PAGE_SIZE}${cursorQuery}`
-  );
-  if (!res.ok) throw new Error(`Indexer returned ${res.status}`);
-  const data = await res.json();
-  const posts: Post[] = data.posts ?? [];
-  return { posts, nextCursor: data.cursor ?? null };
-}
-
 /**
- * Fetch the Following feed for a given user address.
+ * Streams a single feed tab.
  *
- * Strategy:
- *  1. Fetch the user's following list (paginated by cursor).
- *  2. Fan out one GET /api/posts?author=<addr> per followee in parallel.
- *  3. Merge, sort by timestamp desc, return the first PAGE_SIZE entries.
+ * `useState` is used with a function initialiser so the snapshot promise has a
+ * stable identity for the lifetime of the component — `use()` would otherwise
+ * re-suspend on every render. The component is keyed by tab/address in the
+ * parent, so changing either remounts it and fetches the new feed.
  */
-async function fetchFollowingPage(
-  userAddress: string,
-  cursor: string | null
-): Promise<{ posts: Post[]; nextCursor: string | null }> {
-  const cursorQuery = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
-  const followingRes = await fetch(
-    `${INDEXER_URL}/api/feed/following/${userAddress}?limit=${PAGE_SIZE}${cursorQuery}`
+function FeedStream({ tab, address }: { tab: FeedTab; address: string | null }) {
+  const [initialPromise] = useState<Promise<FeedSnapshot>>(() =>
+    getFeedSnapshotPromise(tab, address)
   );
-  if (!followingRes.ok) throw new Error("Failed to fetch following list");
-  const followingData = await followingRes.json();
-  const followingList: string[] = followingData.following ?? [];
-  const nextCursor: string | null = followingData.cursor ?? null;
+  const initial = use(initialPromise);
 
-  if (followingList.length === 0) {
-    return { posts: [], nextCursor: null };
+  const [more, setMore] = useState<LoadMoreState>(() => ({
+    posts: [],
+    cursor: initial.cursor,
+    hasMore: initial.hasMore,
+    loading: false,
+    error: null,
+  }));
+
+  const handleLoadMore = useCallback(async () => {
+    setMore((prev) => ({ ...prev, loading: true, error: null }));
+    const snapshot = await fetchFeedSnapshot(tab, address, { cursor: more.cursor });
+    setMore((prev) => ({
+      posts: [...prev.posts, ...snapshot.posts],
+      cursor: snapshot.cursor,
+      hasMore: snapshot.hasMore,
+      loading: false,
+      error: snapshot.error,
+    }));
+  }, [tab, address, more.cursor]);
+
+  // Only reachable during the server prerender pass (see getFeedSnapshotPromise).
+  if (initial.pending) return <FeedSkeleton />;
+
+  const posts = [...initial.posts, ...more.posts];
+  const error = initial.error ?? more.error;
+
+  if (error && posts.length === 0) {
+    return (
+      <div role="alert" className={ERROR_CLASS} data-testid="feed-error">
+        {error}
+      </div>
+    );
   }
 
-  // Fan out in parallel — await the full array.
-  const postsArrays = await Promise.all(
-    followingList.map(async (addr) => {
-      const postsRes = await fetch(
-        `${INDEXER_URL}/api/posts?author=${encodeURIComponent(addr)}&limit=${PAGE_SIZE}`
-      );
-      if (!postsRes.ok) return [] as Post[];
-      const data = await postsRes.json();
-      return (data.posts ?? []) as Post[];
-    })
+  if (posts.length === 0 && !more.loading) {
+    return (
+      <div className="py-16 text-center text-[var(--text-muted)]" data-testid="empty-feed">
+        {EMPTY_MESSAGE[tab]}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4" data-testid="post-list">
+      {posts.map((post) => (
+        <PostCard key={post.id} post={post} data-testid="post-card" />
+      ))}
+
+      {error && (
+        <div role="alert" className={ERROR_CLASS} data-testid="feed-error">
+          {error}
+        </div>
+      )}
+
+      {more.loading && (
+        <div data-testid="loading-more" className="space-y-4">
+          <PostCardSkeleton />
+        </div>
+      )}
+
+      {more.hasMore && !more.loading && (
+        <div className="flex justify-center pt-4">
+          <button
+            onClick={handleLoadMore}
+            className="rounded-lg border border-[var(--border)] bg-[var(--muted)] px-6 py-2 text-sm font-medium text-[var(--foreground)] hover:border-violet-500/50 transition-colors"
+            data-testid="load-more"
+          >
+            Load more
+          </button>
+        </div>
+      )}
+    </div>
   );
-
-  const allPosts = postsArrays
-    .flat()
-    .sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0))
-    .slice(0, PAGE_SIZE);
-
-  return { posts: allPosts, nextCursor };
 }
-
-// ---------------------------------------------------------------------------
-// Page component
-// ---------------------------------------------------------------------------
 
 export default function FeedPage() {
   const { address: userAddress } = useWallet();
   const [activeTab, setActiveTab] = useState<FeedTab>("for-you");
-
-  const [forYouState, setForYouState] = useState<FeedState>(EMPTY_FEED);
-  const [followingState, setFollowingState] = useState<FeedState>(EMPTY_FEED);
-
-  // Track which tabs have been loaded at least once.
-  const loadedTabs = useRef<Set<FeedTab>>(new Set());
-
-  const loadFeed = useCallback(
-    async (tab: FeedTab, append = false) => {
-      const setState =
-        tab === "for-you" ? setForYouState : setFollowingState;
-      const currentState =
-        tab === "for-you" ? forYouState : followingState;
-
-      if (tab === "following" && !userAddress) {
-        setState((prev) => ({
-          ...prev,
-          error: "Connect your wallet to see your Following feed.",
-          loading: false,
-        }));
-        return;
-      }
-
-      setState((prev) => ({ ...prev, loading: true, error: null }));
-
-      try {
-        const cursor = append ? currentState.cursor : null;
-        const { posts: fetched, nextCursor } =
-          tab === "for-you"
-            ? await fetchForYouPage(cursor)
-            : await fetchFollowingPage(userAddress!, cursor);
-
-        // Exactly one setPosts call per fetch.
-        setState((prev) => ({
-          posts: append ? [...prev.posts, ...fetched] : fetched,
-          cursor: nextCursor,
-          hasMore: fetched.length === PAGE_SIZE,
-          loading: false,
-          error: null,
-        }));
-      } catch (err) {
-        setState((prev) => ({
-          ...prev,
-          loading: false,
-          error:
-            err instanceof Error
-              ? err.message
-              : "Failed to load feed. Please try again.",
-        }));
-      }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [userAddress, forYouState.cursor, followingState.cursor]
-  );
-
-  // Load "For You" on mount.
-  useEffect(() => {
-    if (!loadedTabs.current.has("for-you")) {
-      loadedTabs.current.add("for-you");
-      loadFeed("for-you");
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Load "Following" the first time the user switches to that tab.
-  useEffect(() => {
-    if (activeTab === "following" && !loadedTabs.current.has("following")) {
-      loadedTabs.current.add("following");
-      loadFeed("following");
-    }
-  }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const handleTabChange = (tab: FeedTab) => {
-    setActiveTab(tab);
-  };
-
-  const state = activeTab === "for-you" ? forYouState : followingState;
 
   return (
     <main className="mx-auto max-w-2xl px-4 py-6">
@@ -204,7 +149,7 @@ export default function FeedPage() {
             aria-selected={activeTab === tab}
             aria-controls={`tabpanel-${tab}`}
             id={`tab-${tab}`}
-            onClick={() => handleTabChange(tab)}
+            onClick={() => setActiveTab(tab)}
             className={[
               "px-5 py-2.5 text-sm font-semibold capitalize transition-colors",
               "border-b-2 -mb-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500",

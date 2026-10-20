@@ -34,6 +34,30 @@ export interface AnalyticsAttestation {
 }
 
 /**
+ * An on-chain attestation decoded from an `AttestationVerifiedEvent`.
+ *
+ * Unlike {@link AnalyticsAttestation} (which mirrors the oracle REST payload),
+ * this reflects what is actually recorded on the Stellar ledger and can be
+ * used to derive an account's verification status.
+ */
+export interface OnChainAttestation {
+  /** Creator address the attestation applies to. */
+  creator: string;
+  /** Registered oracle that signed the attestation. */
+  oracleName: string;
+  /** sha256 digest of the attested report. */
+  reportHash: string;
+  /** Attestation validity window start (unix seconds). */
+  windowStart: number;
+  /** Attestation validity window end (unix seconds). */
+  windowEnd: number;
+  /** Transaction hash that recorded the attestation, when available. */
+  txHash?: string;
+  /** Ledger sequence the attestation was recorded in, when available. */
+  ledger?: number;
+}
+
+/**
  * Ledger footprint describing read and write entries touched by a transaction.
  */
 export interface LedgerFootprint {
