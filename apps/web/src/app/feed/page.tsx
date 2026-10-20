@@ -13,33 +13,35 @@
  *  - setPosts / persistFeed called exactly once per successful fetch.
  *  - Cursor is kept independently per tab so switching tabs does not reset
  *    the other tab's pagination state.
+ *
+ * Issue #1724 adds:
+ *  - IntersectionObserver-driven infinite scroll (with a manual button
+ *    fallback for slow connections and browsers without the observer),
+ *  - skeletons for the next page that reserve layout space (no CLS),
+ *  - a "Return to top" FAB,
+ *  - polite aria-live announcements for appended pages.
+ *
+ * Pagination state lives in `useInfiniteFeed`, a local cursor-based hook. The
+ * repo has no TanStack Query provider and the issue forbids new dependencies,
+ * so the hook intentionally mirrors `useInfiniteQuery`'s API.
  */
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useWallet } from "@/hooks/useWallet";
 import { PostCard, type Post } from "@/components/PostCard";
 import { PostCardSkeleton } from "@/components/PostCard";
+import { InfiniteScroll } from "@/components/InfiniteScroll";
+import { ReturnToTop } from "@/components/ReturnToTop";
+import { useInfiniteFeed, type CursorPage } from "@/hooks/useInfiniteFeed";
+import { useSlowConnection } from "@/hooks/useSlowConnection";
 
 const INDEXER_URL = process.env.NEXT_PUBLIC_INDEXER_URL ?? "http://localhost:3001";
 const PAGE_SIZE = 20;
 
 type FeedTab = "for-you" | "following";
 
-interface FeedState {
-  posts: Post[];
-  cursor: string | null;
-  hasMore: boolean;
-  loading: boolean;
-  error: string | null;
-}
-
-const EMPTY_FEED: FeedState = {
-  posts: [],
-  cursor: null,
-  hasMore: true,
-  loading: false,
-  error: null,
-};
+// Stable identity functions so page de-duplication does not re-run needlessly.
+const getPostId = (post: Post) => post.id;
 
 // ---------------------------------------------------------------------------
 // Data-fetching helpers
@@ -51,9 +53,7 @@ async function fetchForYouPage(cursor: string | null): Promise<{
   nextCursor: string | null;
 }> {
   const cursorQuery = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
-  const res = await fetch(
-    `${INDEXER_URL}/api/posts?limit=${PAGE_SIZE}${cursorQuery}`
-  );
+  const res = await fetch(`${INDEXER_URL}/api/posts?limit=${PAGE_SIZE}${cursorQuery}`);
   if (!res.ok) throw new Error(`Indexer returned ${res.status}`);
   const data = await res.json();
   const posts: Post[] = data.posts ?? [];
@@ -99,7 +99,7 @@ async function fetchFollowingPage(
 
   const allPosts = postsArrays
     .flat()
-    .sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0))
+    .sort((a, b) => Number(b.timestamp ?? 0) - Number(a.timestamp ?? 0))
     .slice(0, PAGE_SIZE);
 
   return { posts: allPosts, nextCursor };
@@ -112,171 +112,186 @@ async function fetchFollowingPage(
 export default function FeedPage() {
   const { address: userAddress } = useWallet();
   const [activeTab, setActiveTab] = useState<FeedTab>("for-you");
+  const isSlowConnection = useSlowConnection();
 
-  const [forYouState, setForYouState] = useState<FeedState>(EMPTY_FEED);
-  const [followingState, setFollowingState] = useState<FeedState>(EMPTY_FEED);
+  // Announced by a visually hidden aria-live region after a page is appended.
+  const [announcement, setAnnouncement] = useState("");
+  // Item count before the in-flight "next page" request; null when idle.
+  const announceBaselineRef = useRef<number | null>(null);
+  // Focus target for the return-to-top FAB.
+  const topRef = useRef<HTMLElement>(null);
 
-  // Track which tabs have been loaded at least once.
-  const loadedTabs = useRef<Set<FeedTab>>(new Set());
-
-  const loadFeed = useCallback(
-    async (tab: FeedTab, append = false) => {
-      const setState =
-        tab === "for-you" ? setForYouState : setFollowingState;
-      const currentState =
-        tab === "for-you" ? forYouState : followingState;
-
-      if (tab === "following" && !userAddress) {
-        setState((prev) => ({
-          ...prev,
-          error: "Connect your wallet to see your Following feed.",
-          loading: false,
-        }));
-        return;
-      }
-
-      setState((prev) => ({ ...prev, loading: true, error: null }));
-
-      try {
-        const cursor = append ? currentState.cursor : null;
-        const { posts: fetched, nextCursor } =
-          tab === "for-you"
-            ? await fetchForYouPage(cursor)
-            : await fetchFollowingPage(userAddress!, cursor);
-
-        // Exactly one setPosts call per fetch.
-        setState((prev) => ({
-          posts: append ? [...prev.posts, ...fetched] : fetched,
-          cursor: nextCursor,
-          hasMore: fetched.length === PAGE_SIZE,
-          loading: false,
-          error: null,
-        }));
-      } catch (err) {
-        setState((prev) => ({
-          ...prev,
-          loading: false,
-          error:
-            err instanceof Error
-              ? err.message
-              : "Failed to load feed. Please try again.",
-        }));
-      }
+  const forYouQuery = useInfiniteFeed<Post>({
+    queryKey: ["feed", "for-you"],
+    queryFn: async (cursor): Promise<CursorPage<Post>> => {
+      const { posts, nextCursor } = await fetchForYouPage(cursor);
+      return { items: posts, nextCursor };
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [userAddress, forYouState.cursor, followingState.cursor]
-  );
+    getItemId: getPostId,
+  });
 
-  // Load "For You" on mount.
-  useEffect(() => {
-    if (!loadedTabs.current.has("for-you")) {
-      loadedTabs.current.add("for-you");
-      loadFeed("for-you");
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const followingNeedsWallet = activeTab === "following" && !userAddress;
 
-  // Load "Following" the first time the user switches to that tab.
+  const followingQuery = useInfiniteFeed<Post>({
+    queryKey: ["feed", "following", userAddress ?? "disconnected"],
+    queryFn: async (cursor): Promise<CursorPage<Post>> => {
+      if (!userAddress) return { items: [], nextCursor: null };
+      const { posts, nextCursor } = await fetchFollowingPage(userAddress, cursor);
+      return { items: posts, nextCursor };
+    },
+    enabled: activeTab === "following" && Boolean(userAddress),
+    getItemId: getPostId,
+  });
+
+  const feed = activeTab === "for-you" ? forYouQuery : followingQuery;
+  const { items, isFetchingNextPage, hasNextPage, fetchNextPage, retry } = feed;
+
+  const handleLoadMore = useCallback(() => {
+    if (isFetchingNextPage || !hasNextPage || feed.isError) return;
+
+    announceBaselineRef.current = items.length;
+    fetchNextPage();
+  }, [feed.isError, fetchNextPage, hasNextPage, isFetchingNextPage, items.length]);
+
+  const handleRetry = useCallback(() => {
+    if (isFetchingNextPage) return;
+
+    announceBaselineRef.current = items.length;
+    retry();
+  }, [isFetchingNextPage, items.length, retry]);
+
+  // Announce only appended pages: never the initial page, never a page twice,
+  // and not a failed request (the inline retry describes the failure itself).
   useEffect(() => {
-    if (activeTab === "following" && !loadedTabs.current.has("following")) {
-      loadedTabs.current.add("following");
-      loadFeed("following");
-    }
-  }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
+    const baseline = announceBaselineRef.current;
+    if (baseline === null || isFetchingNextPage) return;
+
+    announceBaselineRef.current = null;
+
+    if (feed.isError || items.length <= baseline) return;
+    const added = items.length - baseline;
+    setAnnouncement(`${added} more ${added === 1 ? "post" : "posts"} loaded`);
+  }, [feed.isError, isFetchingNextPage, items.length]);
 
   const handleTabChange = (tab: FeedTab) => {
+    if (tab === activeTab) return;
     setActiveTab(tab);
+    setAnnouncement("");
+    announceBaselineRef.current = null;
   };
 
-  const state = activeTab === "for-you" ? forYouState : followingState;
+  const feedErrorMessage = followingNeedsWallet
+    ? "Connect your wallet to see your Following feed."
+    : feed.isError && items.length === 0
+      ? (feed.error?.message ?? "Failed to load feed. Please try again.")
+      : null;
+
+  const showInitialSkeleton = feed.isLoading && items.length === 0;
+  const showEmptyState = !showInitialSkeleton && items.length === 0 && !feedErrorMessage;
 
   return (
-    <main className="mx-auto max-w-2xl px-4 py-6">
-      {/* Tab switcher */}
-      <div
-        role="tablist"
-        aria-label="Feed tabs"
-        className="mb-6 flex border-b border-[var(--border)]"
+    <>
+      <main
+        ref={topRef}
+        id="feed-top"
+        tabIndex={-1}
+        aria-label="Feed"
+        className="mx-auto max-w-2xl px-4 py-6 pb-24 md:pb-6"
       >
-        {(["for-you", "following"] as FeedTab[]).map((tab) => (
-          <button
-            key={tab}
-            role="tab"
-            aria-selected={activeTab === tab}
-            aria-controls={`tabpanel-${tab}`}
-            id={`tab-${tab}`}
-            onClick={() => handleTabChange(tab)}
-            className={[
-              "px-5 py-2.5 text-sm font-semibold capitalize transition-colors",
-              "border-b-2 -mb-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500",
-              activeTab === tab
-                ? "border-violet-500 text-violet-400"
-                : "border-transparent text-[var(--text-muted)] hover:text-[var(--foreground)]",
-            ].join(" ")}
-            data-testid={`tab-${tab}`}
-          >
-            {tab === "for-you" ? "For You" : "Following"}
-          </button>
-        ))}
-      </div>
+        {/*
+          Visually hidden live region. The initial page is never announced;
+          only appended pages write text here.
+        */}
+        <div
+          className="sr-only"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          data-testid="feed-announcer"
+        >
+          {announcement}
+        </div>
 
-      {/* Tab panel */}
-      <section
-        role="tabpanel"
-        id={`tabpanel-${activeTab}`}
-        aria-labelledby={`tab-${activeTab}`}
-        data-testid={`tabpanel-${activeTab}`}
-      >
-        {state.error && (
-          <div
-            role="alert"
-            className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-400"
-            data-testid="feed-error"
-          >
-            {state.error}
-          </div>
-        )}
+        {/* Tab switcher */}
+        <div
+          role="tablist"
+          aria-label="Feed tabs"
+          className="mb-6 flex border-b border-[var(--border)]"
+        >
+          {(["for-you", "following"] as FeedTab[]).map((tab) => (
+            <button
+              key={tab}
+              role="tab"
+              aria-selected={activeTab === tab}
+              aria-controls={`tabpanel-${tab}`}
+              id={`tab-${tab}`}
+              onClick={() => handleTabChange(tab)}
+              className={[
+                "px-5 py-2.5 text-sm font-semibold capitalize transition-colors",
+                "border-b-2 -mb-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500",
+                activeTab === tab
+                  ? "border-violet-500 text-violet-400"
+                  : "border-transparent text-[var(--text-muted)] hover:text-[var(--foreground)]",
+              ].join(" ")}
+              data-testid={`tab-${tab}`}
+            >
+              {tab === "for-you" ? "For You" : "Following"}
+            </button>
+          ))}
+        </div>
 
-        {state.loading && state.posts.length === 0 ? (
-          <div data-testid="loading-indicator" className="space-y-4">
-            <PostCardSkeleton />
-            <PostCardSkeleton />
-            <PostCardSkeleton />
-          </div>
-        ) : state.posts.length === 0 && !state.loading ? (
-          <div
-            className="py-16 text-center text-[var(--text-muted)]"
-            data-testid="empty-feed"
-          >
-            {activeTab === "following"
-              ? "Follow some accounts to see their posts here."
-              : "No posts yet. Be the first to share something!"}
-          </div>
-        ) : (
-          <div className="space-y-4" data-testid="post-list">
-            {state.posts.map((post) => (
-              <PostCard key={post.id} post={post} data-testid="post-card" />
-            ))}
+        {/* Tab panel */}
+        <section
+          role="tabpanel"
+          id={`tabpanel-${activeTab}`}
+          aria-labelledby={`tab-${activeTab}`}
+          data-testid={`tabpanel-${activeTab}`}
+        >
+          {feedErrorMessage && (
+            <div
+              role="alert"
+              className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-400"
+              data-testid="feed-error"
+            >
+              {feedErrorMessage}
+            </div>
+          )}
 
-            {state.loading && (
-              <div data-testid="loading-more" className="space-y-4">
-                <PostCardSkeleton />
-              </div>
-            )}
+          {showInitialSkeleton ? (
+            <div data-testid="loading-indicator" className="space-y-4">
+              <PostCardSkeleton />
+              <PostCardSkeleton />
+              <PostCardSkeleton />
+            </div>
+          ) : showEmptyState ? (
+            <div className="py-16 text-center text-[var(--text-muted)]" data-testid="empty-feed">
+              {activeTab === "following"
+                ? "Follow some accounts to see their posts here."
+                : "No posts yet. Be the first to share something!"}
+            </div>
+          ) : (
+            <div className="space-y-4" data-testid="post-list">
+              {items.map((post) => (
+                <PostCard key={post.id} post={post} />
+              ))}
 
-            {state.hasMore && !state.loading && (
-              <div className="flex justify-center pt-4">
-                <button
-                  onClick={() => loadFeed(activeTab, true)}
-                  className="rounded-lg border border-[var(--border)] bg-[var(--muted)] px-6 py-2 text-sm font-medium text-[var(--foreground)] hover:border-violet-500/50 transition-colors"
-                  data-testid="load-more"
-                >
-                  Load more
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </section>
-    </main>
+              <InfiniteScroll
+                key="infinite-scroll"
+                onLoadMore={handleLoadMore}
+                onRetry={handleRetry}
+                hasMore={hasNextPage && !followingNeedsWallet}
+                isLoading={isFetchingNextPage}
+                disabled={followingNeedsWallet}
+                manual={isSlowConnection}
+                error={feed.isError}
+                skeleton={<PostCardSkeleton />}
+              />
+            </div>
+          )}
+        </section>
+      </main>
+
+      <ReturnToTop targetRef={topRef} />
+    </>
   );
 }

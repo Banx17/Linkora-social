@@ -10,7 +10,7 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import FeedPage from "./page";
 
 // ---------------------------------------------------------------------------
@@ -191,9 +191,7 @@ describe("FeedPage (#1580)", () => {
     await waitFor(() => {
       expect(screen.getByTestId("feed-error")).toBeInTheDocument();
     });
-    expect(screen.getByTestId("feed-error")).toHaveTextContent(
-      "Connect your wallet"
-    );
+    expect(screen.getByTestId("feed-error")).toHaveTextContent("Connect your wallet");
   });
 
   it("fans out one fetch per followed address and merges results", async () => {
@@ -249,6 +247,216 @@ describe("FeedPage (#1580)", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("feed-error")).toBeInTheDocument();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Issue #1724 — infinite scroll integration
+  // ---------------------------------------------------------------------------
+
+  describe("FeedPage infinite scroll (#1724)", () => {
+    type ObserverCallback = (
+      entries: IntersectionObserverEntry[],
+      observer: IntersectionObserver
+    ) => void;
+
+    class MockIntersectionObserver {
+      static instances: MockIntersectionObserver[] = [];
+
+      callback: ObserverCallback;
+      disconnect = jest.fn();
+      observe = jest.fn();
+      unobserve = jest.fn();
+      takeRecords = jest.fn(() => []);
+
+      constructor(callback: ObserverCallback) {
+        this.callback = callback;
+        MockIntersectionObserver.instances.push(this);
+      }
+
+      trigger(isIntersecting: boolean) {
+        this.callback(
+          [{ isIntersecting } as IntersectionObserverEntry],
+          this as unknown as IntersectionObserver
+        );
+      }
+    }
+
+    const originalIntersectionObserver = global.IntersectionObserver;
+
+    const makePost = (id: string, content: string) => ({
+      id,
+      author: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      username: id,
+      content,
+      like_count: 0,
+      tip_total: 0,
+      timestamp: 1000,
+    });
+
+    const okResponse = (posts: unknown[], cursor: string | null) => ({
+      ok: true,
+      json: async () => ({ posts, cursor }),
+    });
+
+    function setupPaginatedFetchMock({
+      firstPage,
+      secondPage,
+    }: {
+      firstPage: ReturnType<typeof makePost>[];
+      secondPage: ReturnType<typeof makePost>[];
+    }) {
+      mockFetch.mockImplementation(async (url: string) => {
+        const target = String(url);
+        if (target.includes("cursor=cursor-1")) {
+          return okResponse(secondPage, null);
+        }
+        if (target.includes("/api/posts")) {
+          return okResponse(firstPage, "cursor-1");
+        }
+        return { ok: false, json: async () => ({}) };
+      });
+    }
+
+    async function triggerSentinel() {
+      await waitFor(() => expect(MockIntersectionObserver.instances.length).toBeGreaterThan(0));
+      const observer =
+        MockIntersectionObserver.instances[MockIntersectionObserver.instances.length - 1];
+      act(() => observer.trigger(true));
+    }
+
+    beforeEach(() => {
+      MockIntersectionObserver.instances = [];
+      global.IntersectionObserver =
+        MockIntersectionObserver as unknown as typeof IntersectionObserver;
+      mockUseWallet.mockReturnValue({ address: null });
+    });
+
+    afterEach(() => {
+      global.IntersectionObserver = originalIntersectionObserver;
+      delete (navigator as Navigator & { connection?: unknown }).connection;
+    });
+
+    it("loads and appends the next page once, de-duplicating overlapping posts", async () => {
+      const firstPage = [makePost("p1", "Infinite post 1"), makePost("p2", "Infinite post 2")];
+      const secondPage = [makePost("p2", "Infinite post 2"), makePost("p3", "Infinite post 3")];
+      setupPaginatedFetchMock({ firstPage, secondPage });
+
+      render(<FeedPage />);
+      await waitFor(() => expect(screen.getByText("Infinite post 1")).toBeInTheDocument());
+
+      await triggerSentinel();
+
+      await waitFor(() => expect(screen.getByText("Infinite post 3")).toBeInTheDocument());
+      expect(screen.getAllByText("Infinite post 2")).toHaveLength(1);
+
+      const feedCalls = mockFetch.mock.calls.filter(([url]) => String(url).includes("/api/posts"));
+      expect(feedCalls).toHaveLength(2);
+      expect(screen.queryByTestId("load-more")).not.toBeInTheDocument();
+    });
+
+    it("shows a skeleton while the next page is in flight", async () => {
+      const firstPage = [makePost("p1", "Infinite post 1")];
+      const secondPage = [makePost("p2", "Infinite post 2")];
+
+      let resolveSecondPage!: (value: unknown) => void;
+      const secondPagePromise = new Promise((resolve) => {
+        resolveSecondPage = resolve;
+      });
+
+      mockFetch.mockImplementation(async (url: string) => {
+        if (String(url).includes("cursor=cursor-1")) return secondPagePromise;
+        return okResponse(firstPage, "cursor-1");
+      });
+
+      render(<FeedPage />);
+      await waitFor(() => expect(screen.getByText("Infinite post 1")).toBeInTheDocument());
+
+      await triggerSentinel();
+
+      expect(await screen.findByTestId("infinite-scroll-skeleton")).toBeInTheDocument();
+
+      await act(async () => {
+        resolveSecondPage(okResponse(secondPage, null));
+      });
+
+      await waitFor(() => expect(screen.getByText("Infinite post 2")).toBeInTheDocument());
+      expect(screen.queryByTestId("infinite-scroll-skeleton")).not.toBeInTheDocument();
+    });
+
+    it("announces appended posts politely but never the initial page", async () => {
+      const firstPage = [makePost("p1", "Infinite post 1"), makePost("p2", "Infinite post 2")];
+      const secondPage = [makePost("p3", "Infinite post 3"), makePost("p4", "Infinite post 4")];
+      setupPaginatedFetchMock({ firstPage, secondPage });
+
+      render(<FeedPage />);
+      await waitFor(() => expect(screen.getByText("Infinite post 1")).toBeInTheDocument());
+
+      const announcer = screen.getByTestId("feed-announcer");
+      expect(announcer).toHaveAttribute("aria-live", "polite");
+      expect(announcer.textContent).toBe("");
+
+      await triggerSentinel();
+
+      await waitFor(() => expect(screen.getByText("Infinite post 4")).toBeInTheDocument());
+      await waitFor(() =>
+        expect(screen.getByTestId("feed-announcer")).toHaveTextContent("2 more posts loaded")
+      );
+    });
+
+    it("falls back to a manual Load more button on a 2g connection", async () => {
+      Object.defineProperty(navigator, "connection", {
+        configurable: true,
+        value: {
+          effectiveType: "2g",
+          saveData: false,
+          addEventListener: jest.fn(),
+          removeEventListener: jest.fn(),
+        },
+      });
+      setupPaginatedFetchMock({
+        firstPage: [makePost("p1", "Infinite post 1")],
+        secondPage: [makePost("p2", "Infinite post 2")],
+      });
+
+      render(<FeedPage />);
+      await waitFor(() => expect(screen.getByText("Infinite post 1")).toBeInTheDocument());
+
+      expect(MockIntersectionObserver.instances).toHaveLength(0);
+      fireEvent.click(screen.getByTestId("load-more"));
+
+      await waitFor(() => expect(screen.getByText("Infinite post 2")).toBeInTheDocument());
+    });
+
+    it("shows an inline retry when the next page fails and does not loop", async () => {
+      const cursorCalls = () =>
+        mockFetch.mock.calls.filter(([url]: [string]) => String(url).includes("cursor=cursor-1"))
+          .length;
+
+      mockFetch.mockImplementation(async (url: string) => {
+        if (String(url).includes("cursor=cursor-1")) {
+          return { ok: false, json: async () => ({}) };
+        }
+        return okResponse([makePost("p1", "Infinite post 1")], "cursor-1");
+      });
+
+      render(<FeedPage />);
+      await waitFor(() => expect(screen.getByText("Infinite post 1")).toBeInTheDocument());
+
+      await triggerSentinel();
+      await waitFor(() => expect(screen.getByTestId("infinite-scroll-retry")).toBeInTheDocument());
+      expect(cursorCalls()).toBe(1);
+
+      fireEvent.click(screen.getByTestId("infinite-scroll-retry"));
+      await waitFor(() => expect(cursorCalls()).toBe(2));
+
+      // Give an incorrect automatic retry loop time to fire.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      });
+
+      expect(cursorCalls()).toBe(2);
+      expect(screen.getByTestId("infinite-scroll-retry")).toBeInTheDocument();
     });
   });
 });
