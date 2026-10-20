@@ -24,6 +24,7 @@ export const SHORTCUTS: readonly ShortcutDefinition[] = [
   { keys: ["?"], label: "Open keyboard shortcuts help", group: "Actions" },
 
   // ── Navigation ───────────────────────────────────────────────────────────
+  { keys: ["Ctrl+K"], label: "Open command palette (⌘K on macOS)", group: "Navigation" },
   { keys: ["g", "f"], label: "Go to Feed", group: "Navigation" },
   { keys: ["g", "p"], label: "Go to Profile", group: "Navigation" },
   { keys: ["g", "s"], label: "Go to Settings", group: "Navigation" },

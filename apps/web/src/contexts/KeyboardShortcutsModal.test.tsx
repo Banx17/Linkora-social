@@ -1,28 +1,43 @@
-import { render, screen } from '@testing-library/react';
-import KeyboardShortcutsModal from './KeyboardShortcutsModal';
-import { KeyboardShortcutsProvider } from './KeyboardShortcutsContext';
+import React from "react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
+import { KeyboardShortcutsModal } from "../components/KeyboardShortcutsModal";
+import { KeyboardShortcutsProvider, useKeyboardShortcutsContext } from "./KeyboardShortcutsContext";
 
-describe('KeyboardShortcutsModal', () => {
-  it('renders modal with shortcuts', () => {
+function TestConsumer() {
+  const { openHelpModal } = useKeyboardShortcutsContext();
+  return (
+    <div>
+      <button onClick={openHelpModal}>Open</button>
+      <KeyboardShortcutsModal />
+    </div>
+  );
+}
+
+describe("KeyboardShortcutsModal", () => {
+  it("renders modal with shortcuts", () => {
     render(
       <KeyboardShortcutsProvider>
-        <KeyboardShortcutsModal />
+        <TestConsumer />
       </KeyboardShortcutsProvider>
     );
 
-    expect(screen.getByText('Keyboard Shortcuts')).toBeInTheDocument();
-    expect(screen.getByText('Ctrl+K')).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Open"));
+
+    expect(screen.getByText("Keyboard Shortcuts")).toBeInTheDocument();
+    expect(screen.getByText("Ctrl+K")).toBeInTheDocument();
   });
 
-  it('closes when escape key is pressed', () => {
+  it("closes when escape key is pressed", () => {
     render(
       <KeyboardShortcutsProvider>
-        <KeyboardShortcutsModal />
+        <TestConsumer />
       </KeyboardShortcutsProvider>
     );
 
-    const modal = screen.getByRole('dialog');
-    fireEvent.keyDown(modal, { key: 'Escape' });
-    expect(modal).not.toBeVisible();
+    fireEvent.click(screen.getByText("Open"));
+
+    const modal = screen.getByRole("dialog");
+    fireEvent.keyDown(modal, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });
