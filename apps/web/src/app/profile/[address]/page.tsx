@@ -27,6 +27,7 @@ import { signTransaction } from "@stellar/freighter-api";
 import { LinkoraClient } from "linkora-sdk";
 import { buildSignAndSubmit } from "@/lib/tx";
 import { addToBlockedList, removeFromBlockedList } from "@/lib/blockedStore";
+import { trackProfileViewed } from "@/lib/gtag";
 
 const CONTRACT_ID = process.env.NEXT_PUBLIC_CONTRACT_ID || "CDUMMY";
 const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL || "https://soroban-testnet.stellar.org";
@@ -118,6 +119,17 @@ export default function ProfilePage() {
   useLinkoraEvent<TipEventData>("TipEvent", () => {
     refetch();
   });
+
+  /* ── Track profile view ──────────────────────────────────────────────── */
+
+  useEffect(() => {
+    if (state.status === "success") {
+      trackProfileViewed({
+        profileAddress: address,
+        isSelf: currentUserAddress === address,
+      });
+    }
+  }, [state.status, address, currentUserAddress]);
 
   /* ── Follow / unfollow ──────────────────────────────────────────────── */
 

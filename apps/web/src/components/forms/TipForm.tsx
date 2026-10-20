@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { validateAmount, validateStellarAddress } from '@/lib/validate';
 import { FieldError } from './FieldError';
+import { trackTipSent } from '@/lib/gtag';
 
 export interface TipFormValues {
   tokenAddress: string;
@@ -45,6 +46,12 @@ export function TipForm({ postId, onSubmit, disabled = false }: TipFormProps) {
     setSubmitting(true);
     try {
       await onSubmit({ tokenAddress: tokenAddress.trim(), amount: amount.trim() });
+      trackTipSent({
+        tipper: 'client',
+        tokenAddress: tokenAddress.trim(),
+        amount: amount.trim(),
+        postId,
+      });
       setAmount('');
     } finally {
       setSubmitting(false);

@@ -12,6 +12,7 @@ import { KeyboardShortcutsProvider } from "@/contexts/KeyboardShortcutsContext";
 import { KeyboardShortcutsModal } from "@/components/KeyboardShortcutsModal";
 import { ServiceWorkerRegistration } from "@/components/ServiceWorkerRegistration";
 import { ResourceHints, ThirdPartyScripts } from "@/components/ThirdPartyScripts";
+import { ConsentBanner } from "@/components/ConsentBanner";
 
 export const metadata: Metadata = {
   title: "Linkora",
@@ -69,6 +70,33 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             __html: `(function(){try{var t=localStorage.getItem('linkora_theme');if(t!=='light'&&t!=='dark'){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}document.documentElement.dataset.theme=t;}catch(e){document.documentElement.dataset.theme='light';}})();`,
           }}
         />
+        {/*
+          Consent Mode v2 bootstrap — MUST run before the GA4 script loads.
+
+          1. Initialises window.dataLayer and the gtag() stub so subsequent
+             gtag() calls are queued rather than lost.
+          2. Sets all consent signals to "denied" by default (GDPR-compliant).
+             GA4 will not fire any measurement hits until the user accepts.
+          3. Enables url_passthrough and ads_data_redaction for cookieless
+             modelling when consent is denied (recommended by Google).
+        */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              window.dataLayer = window.dataLayer || [];
+              function gtag(){dataLayer.push(arguments);}
+              gtag('consent', 'default', {
+                analytics_storage: 'denied',
+                ad_storage: 'denied',
+                ad_user_data: 'denied',
+                ad_personalization: 'denied',
+                wait_for_update: 500
+              });
+              gtag('set', 'url_passthrough', true);
+              gtag('set', 'ads_data_redaction', true);
+            `,
+          }}
+        />
         {/* Connection hints for the RPC / indexer origins */}
         <ResourceHints />
       </head>
@@ -84,6 +112,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </a>
         <ThemeBootstrap />
         <AppProviders>{children}</AppProviders>
+        {/* Cookie consent banner — shown on first visit, dismissed after choice */}
+        <ConsentBanner />
       </body>
     </html>
   );

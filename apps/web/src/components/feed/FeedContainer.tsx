@@ -1,31 +1,78 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { usePosts } from "@/hooks/usePosts";
 import { CreatePostModal } from "../modals/CreatePostModal";
 import { PostCard, PostCardSkeleton } from "../PostCard";
-import { Plus } from "lucide-react";
+import { Plus, X } from "lucide-react";
+import { useFeatureFlag } from "@/lib/featureFlags";
+import { trackPostCreated } from "@/lib/gtag";
+
+/** Number of posts to show per page when infinite scroll is enabled. */
+const PAGE_SIZE = 10;
+
+/** Duration (ms) before the error toast auto-dismisses. */
+const TOAST_DURATION_MS = 5000;
 
 export interface FeedContainerProps {
   authorAddress?: string;
 }
 
 export function FeedContainer({ authorAddress }: FeedContainerProps) {
+  const infiniteScrollEnabled = useFeatureFlag("infinite-scroll");
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const { posts, loading, error, addPostOptimistic } = usePosts();
+  const { posts, loading, error, postError, clearPostError, addPostOptimistic } = usePosts();
 
-  const handleCreatePost = async (data: {
-    content: string;
-    images: string[];
-    linkUrl?: string;
-  }) => {
-    await addPostOptimistic({
-      content: data.content,
-      author: authorAddress,
-      images: data.images,
-      linkUrl: data.linkUrl,
-    });
-  };
+  // ── Infinite scroll state ────────────────────────────────────────────────
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  const visiblePosts = infiniteScrollEnabled ? posts.slice(0, visibleCount) : posts;
+  const hasMore = infiniteScrollEnabled && visibleCount < posts.length;
+
+  useEffect(() => {
+    if (!infiniteScrollEnabled) return;
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && hasMore) {
+          setVisibleCount((prev) => Math.min(prev + PAGE_SIZE, posts.length));
+        }
+      },
+      { rootMargin: "200px" }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [infiniteScrollEnabled, hasMore, posts.length]);
+
+  // ── Auto-dismiss error toast ─────────────────────────────────────────────
+  useEffect(() => {
+    if (!postError) return;
+    const timer = setTimeout(clearPostError, TOAST_DURATION_MS);
+    return () => clearTimeout(timer);
+  }, [postError, clearPostError]);
+
+  // ── Post creation ────────────────────────────────────────────────────────
+  const handleCreatePost = useCallback(
+    async (data: { content: string; images: string[]; linkUrl?: string }) => {
+      const confirmed = await addPostOptimistic({
+        content: data.content,
+        author: authorAddress,
+        images: data.images,
+        linkUrl: data.linkUrl,
+      });
+      // Track confirmed creation (after server response, not on optimistic add)
+      if (confirmed) {
+        trackPostCreated({
+          author: authorAddress ?? "anonymous",
+          contentLength: data.content.length,
+          hasMedia: data.images.length > 0,
+        });
+      }
+    },
+    [addPostOptimistic, authorAddress]
+  );
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-6 space-y-6">
@@ -50,10 +97,29 @@ export function FeedContainer({ authorAddress }: FeedContainerProps) {
         </button>
       </div>
 
-      {/* Error state */}
+      {/* Fetch error */}
       {error && (
         <div className="rounded-lg bg-red-500/10 border border-red-500/20 p-4 text-sm text-red-400 text-center">
           {error}
+        </div>
+      )}
+
+      {/* Mutation error toast */}
+      {postError && (
+        <div
+          role="alert"
+          aria-live="assertive"
+          className="flex items-center justify-between gap-3 rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3 text-sm text-red-400"
+        >
+          <span>{postError}</span>
+          <button
+            type="button"
+            onClick={clearPostError}
+            aria-label="Dismiss error"
+            className="shrink-0 text-red-400/70 hover:text-red-300 transition-colors"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
       )}
 
@@ -64,28 +130,59 @@ export function FeedContainer({ authorAddress }: FeedContainerProps) {
           <PostCardSkeleton />
           <PostCardSkeleton />
         </div>
-      ) : posts.length === 0 ? (
+      ) : visiblePosts.length === 0 ? (
         <div className="text-center py-12 border border-dashed border-[var(--border)] rounded-xl">
           <p className="text-gray-500 font-medium">No posts found</p>
           <p className="text-xs text-gray-400 mt-1">Be the first one to create a post!</p>
         </div>
       ) : (
         <div className="space-y-4">
-          {posts.map((post) => (
+          {visiblePosts.map((post) => (
             <div
               key={post.id}
-              className={`transition-opacity duration-200 ${
-                post.isOptimistic ? "opacity-70 animate-pulse" : "opacity-100"
+              className={`transition-all duration-300 ${
+                post.isDeleting
+                  ? "opacity-0 scale-95 pointer-events-none"
+                  : post.isOptimistic
+                    ? "opacity-60"
+                    : "opacity-100"
               }`}
+              aria-hidden={post.isDeleting}
             >
               <PostCard post={post} />
-              {post.isOptimistic && (
-                <span className="block mt-1 text-right text-[10px] text-violet-400 font-medium">
-                  Posting...
-                </span>
+              {post.isPending && !post.isDeleting && (
+                <div className="flex items-center gap-1.5 mt-1 justify-end">
+                  {/* Spinner */}
+                  <span
+                    className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-violet-400 border-t-transparent"
+                    aria-hidden="true"
+                  />
+                  <span className="text-[10px] text-violet-400 font-medium">
+                    Posting…
+                  </span>
+                </div>
+              )}
+              {post.error && (
+                <p
+                  role="alert"
+                  className="mt-1 text-right text-[10px] text-red-400"
+                >
+                  {post.error}
+                </p>
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Infinite scroll sentinel / loading indicator */}
+      {infiniteScrollEnabled && (
+        <div ref={sentinelRef} aria-hidden="true">
+          {hasMore && (
+            <div className="flex justify-center py-4">
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-violet-500 border-t-transparent" />
+            </div>
+          )}
         </div>
       )}
 
