@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { VerificationBadge, type VerificationLevel } from "@/components/VerificationBadge";
 
 export interface Profile {
   address: string;
@@ -8,6 +9,12 @@ export interface Profile {
   followerCount?: number;
   follower_count?: number;
   isFollowing?: boolean;
+  /** Whether the account holds an on-chain attestation. */
+  isVerified?: boolean;
+  is_verified?: boolean;
+  /** Provenance of the account's verification, when verified. */
+  verificationLevel?: VerificationLevel | null;
+  verification_level?: VerificationLevel | null;
 }
 
 interface ProfileCardProps {
@@ -22,6 +29,8 @@ export function ProfileCard({ profile }: ProfileCardProps) {
   const [following, setFollowing] = useState(!!profile.isFollowing);
   const followers = profile.followerCount ?? profile.follower_count ?? 0;
   const displayName = profile.username || formatAddress(profile.address);
+  const isVerified = profile.isVerified ?? profile.is_verified ?? false;
+  const verificationLevel = profile.verificationLevel ?? profile.verification_level ?? "identity";
 
   return (
     <article className="flex flex-col sm:flex-row items-start sm:items-center gap-3 md:gap-4 rounded-lg border border-[var(--border)] bg-[var(--muted)] p-3 md:p-5">
@@ -30,7 +39,10 @@ export function ProfileCard({ profile }: ProfileCardProps) {
       </div>
 
       <div className="min-w-0 flex-1">
-        <h2 className="truncate font-semibold text-[var(--foreground)]">{displayName}</h2>
+        <h2 className="flex items-center gap-1.5 truncate font-semibold text-[var(--foreground)]">
+          <span className="truncate">{displayName}</span>
+          {isVerified && <VerificationBadge level={verificationLevel} subject={displayName} />}
+        </h2>
         <p className="truncate text-sm text-[var(--text-muted)]" title={profile.address}>
           {formatAddress(profile.address)}
         </p>

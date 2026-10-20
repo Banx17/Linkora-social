@@ -14,6 +14,7 @@ import {
 } from "@/lib/LinkoraEventSubscriber";
 import { FollowDrawer } from "@/components/profile/FollowDrawer";
 import { CreatorTokenPanel } from "@/components/profile/CreatorTokenPanel";
+import { VerificationBadge } from "@/components/VerificationBadge";
 import {
   TransactionBuilder,
   BASE_FEE,
@@ -317,6 +318,7 @@ export default function ProfilePage() {
   }
 
   const { profile, posts, postsHasMore, creatorTokenBalance, totalTipsReceived } = state.data;
+  const { isVerified, verificationLevel } = state.data;
   const isSelf = currentUserAddress === address;
 
   return (
@@ -338,8 +340,14 @@ export default function ProfilePage() {
 
           {/* Name / address / bio */}
           <div className="flex-1 min-w-0">
-            <h1 id="profile-username" className="text-3xl font-bold truncate">
-              {profile.username}
+            <h1 id="profile-username" className="flex items-center gap-2 text-3xl font-bold truncate">
+              <span className="truncate">{profile.username}</span>
+              {isVerified && (
+                <VerificationBadge
+                  level={verificationLevel ?? "identity"}
+                  subject={profile.username}
+                />
+              )}
             </h1>
 
             <p className="text-[var(--text-muted)] font-mono text-sm mt-1 flex items-center gap-2">

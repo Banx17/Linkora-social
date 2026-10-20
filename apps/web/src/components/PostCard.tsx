@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { VerificationBadge, type VerificationLevel } from "@/components/VerificationBadge";
 
 export interface Post {
   id: string | number;
@@ -12,6 +13,10 @@ export interface Post {
   timestamp?: string | number;
   created_at?: string;
   imageUrl?: string;
+  /** Whether the author holds an on-chain attestation. */
+  isVerified?: boolean;
+  /** Provenance of the author's verification, when verified. */
+  verificationLevel?: VerificationLevel | null;
 }
 
 interface PostCardProps {
@@ -112,11 +117,19 @@ export function PostCard({
   return (
     <article className="rounded-xl border border-[var(--border)] bg-[var(--muted)] p-3 md:p-4 lg:p-5 shadow-lg transition-all duration-300 hover:border-violet-500/40 hover:shadow-violet-950/10">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-sm text-[var(--text-muted)]">
-        <span
-          className="font-medium hover:text-[var(--foreground)] transition-colors"
-          title={post.author}
-        >
-          By {formatAuthor(post.author)}
+        <span className="inline-flex items-center gap-1.5">
+          <span
+            className="font-medium hover:text-[var(--foreground)] transition-colors"
+            title={post.author}
+          >
+            By {formatAuthor(post.author)}
+          </span>
+          {post.isVerified && (
+            <VerificationBadge
+              level={post.verificationLevel ?? "identity"}
+              subject={post.username || formatAuthor(post.author)}
+            />
+          )}
         </span>
         <time className="text-xs text-[var(--text-muted)]">{formatDate(post)}</time>
       </div>

@@ -14,7 +14,14 @@ import {
   type FeeBumpTransaction,
 } from "@stellar/stellar-base";
 import { GeneratedLinkoraClient } from "./generated/client.js";
-import { Profile, Post, Pool, SimulationResult, LedgerFootprint } from "./types.js";
+import {
+  Profile,
+  Post,
+  Pool,
+  SimulationResult,
+  LedgerFootprint,
+  OnChainAttestation,
+} from "./types.js";
 import { Page, PaginationOptions, fetchPageWithCursor, paginateList } from "./pagination.js";
 import {
   mapError,
@@ -47,6 +54,7 @@ import {
 import { submitTransaction } from "./submit.js";
 import { mapMultiOperationAuth } from "./multi-operation-auth.js";
 import { buildBumpSequenceTransaction, buildFeeBumpTransaction } from "./tx-builder.js";
+import { parseContractEvent, type SorobanEvent } from "./events/types.js";
 import {
   ensureAddress,
   ensureAddressList,
@@ -737,6 +745,70 @@ export class LinkoraClient extends GeneratedLinkoraClient {
    */
   async getProfileCount(): Promise<bigint> {
     return super.getProfileCount();
+  }
+
+  /**
+   * Look up the most recent on-chain analytics attestation recorded for a
+   * creator. Attestations are emitted by the contract's
+   * `verify_analytics_attestation` entrypoint as `AttestationVerifiedEvent`s.
+   *
+   * Returns the latest matching attestation, or `null` when the account has
+   * never been attested on-chain.
+   *
+   * @example
+   * ```ts
+   * const attestation = await client.getAnalyticsAttestation("GB...");
+   * if (attestation) console.log(attestation.oracleName);
+   * ```
+   */
+  async getAnalyticsAttestation(creator: string): Promise<OnChainAttestation | null> {
+    const attestations = await this.getAnalyticsAttestations(creator);
+    const latest = attestations[attestations.length - 1];
+    return latest ?? null;
+  }
+
+  /**
+   * Return every on-chain analytics attestation recorded for a creator,
+   * ordered oldest to newest.
+   */
+  async getAnalyticsAttestations(creator: string): Promise<OnChainAttestation[]> {
+    const response = await this._rpcServer.getEvents({
+      startLedger: 1,
+      filters: [
+        {
+          type: "contract",
+          contractIds: [this._contractId],
+        },
+      ],
+      limit: 200,
+    });
+
+    const results: OnChainAttestation[] = [];
+    for (const raw of response.events) {
+      const rawEvent: SorobanEvent = {
+        ledger: raw.ledger,
+        ledgerClosedAt: raw.ledgerClosedAt,
+        contractId: raw.contractId ? raw.contractId.toString() : undefined,
+        id: raw.id,
+        topics: raw.topic.map((t) => t.toXDR("base64")),
+        data: raw.value.toXDR("base64"),
+        txHash: raw.txHash,
+      };
+
+      const parsed = parseContractEvent(rawEvent);
+      if (!parsed || parsed.type !== "attestation_verified") continue;
+      if (parsed.creator !== creator) continue;
+      results.push({
+        creator: parsed.creator,
+        oracleName: parsed.oracle_name,
+        reportHash: parsed.report_hash,
+        windowStart: parsed.window_start,
+        windowEnd: parsed.window_end,
+        txHash: parsed.meta.txHash,
+        ledger: parsed.meta.ledger,
+      });
+    }
+    return results;
   }
 
   /**
