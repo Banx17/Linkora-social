@@ -27,7 +27,7 @@ import { signTransaction } from "@stellar/freighter-api";
 import { LinkoraClient } from "linkora-sdk";
 import { buildSignAndSubmit } from "@/lib/tx";
 import { addToBlockedList, removeFromBlockedList } from "@/lib/blockedStore";
-import { trackProfileViewed } from "@/lib/gtag";
+import { getProfileAvatar, getProfileCover } from "@/lib/profileMedia";
 
 const CONTRACT_ID = process.env.NEXT_PUBLIC_CONTRACT_ID || "CDUMMY";
 const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL || "https://soroban-testnet.stellar.org";
@@ -84,7 +84,17 @@ export default function ProfilePage() {
   const [followLoading, setFollowLoading] = useState(false);
   const [isBlocked, setIsBlocked] = useState(false);
   const [blocking, setBlocking] = useState(false);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [coverUrl, setCoverUrl] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // Uploaded profile images are stored locally until the on-chain profile
+  // model carries them (see ProfileImageUploader / profileMedia).
+  useEffect(() => {
+    if (!address) return;
+    setAvatarUrl(getProfileAvatar(address));
+    setCoverUrl(getProfileCover(address));
+  }, [address]);
 
   /* ── Optimistic follow state ────────────────────────────────────────── */
 
@@ -351,6 +361,18 @@ export default function ProfilePage() {
   return (
     <div className="min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
       <div className="max-w-4xl mx-auto p-4 md:p-8">
+        {coverUrl && (
+          <div className="mb-4 overflow-hidden rounded-2xl border border-[var(--bg-tertiary)]">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={coverUrl}
+              alt={`${profile.username}'s cover image`}
+              className="h-40 w-full object-cover md:h-56"
+              id="profile-cover"
+            />
+          </div>
+        )}
+
         {/* ── Profile header ───────────────────────────────────────────── */}
         <section
           id="profile-header"
@@ -359,9 +381,9 @@ export default function ProfilePage() {
         >
           {/* Avatar */}
           <img
-            src={blockieUrl(address)}
+            src={avatarUrl ?? blockieUrl(address)}
             alt={`${profile.username}'s avatar`}
-            className="w-24 h-24 rounded-full border-4 border-[var(--bg-primary)]"
+            className="w-24 h-24 rounded-full border-4 border-[var(--bg-primary)] object-cover"
             id="profile-avatar"
           />
 

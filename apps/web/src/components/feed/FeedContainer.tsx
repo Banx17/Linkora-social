@@ -4,15 +4,11 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { usePosts } from "@/hooks/usePosts";
 import { CreatePostModal } from "../modals/CreatePostModal";
 import { PostCard, PostCardSkeleton } from "../PostCard";
-import { Plus, X } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useFeatureFlag } from "@/lib/featureFlags";
-import { trackPostCreated } from "@/lib/gtag";
 
 /** Number of posts to show per page when infinite scroll is enabled. */
 const PAGE_SIZE = 10;
-
-/** Duration (ms) before the error toast auto-dismisses. */
-const TOAST_DURATION_MS = 5000;
 
 export interface FeedContainerProps {
   authorAddress?: string;
@@ -21,19 +17,23 @@ export interface FeedContainerProps {
 export function FeedContainer({ authorAddress }: FeedContainerProps) {
   const infiniteScrollEnabled = useFeatureFlag("infinite-scroll");
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const { posts, loading, error, postError, clearPostError, addPostOptimistic } = usePosts();
+  const { posts, loading, error, addPostOptimistic } = usePosts();
 
   // ── Infinite scroll state ────────────────────────────────────────────────
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
+  // The list of posts actually shown — all posts when flag is off, paginated when on
   const visiblePosts = infiniteScrollEnabled ? posts.slice(0, visibleCount) : posts;
   const hasMore = infiniteScrollEnabled && visibleCount < posts.length;
 
+  // Attach IntersectionObserver to load the next page when sentinel enters view
   useEffect(() => {
     if (!infiniteScrollEnabled) return;
+
     const sentinel = sentinelRef.current;
     if (!sentinel) return;
+
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0]?.isIntersecting && hasMore) {
@@ -42,34 +42,19 @@ export function FeedContainer({ authorAddress }: FeedContainerProps) {
       },
       { rootMargin: "200px" }
     );
+
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [infiniteScrollEnabled, hasMore, posts.length]);
 
-  // ── Auto-dismiss error toast ─────────────────────────────────────────────
-  useEffect(() => {
-    if (!postError) return;
-    const timer = setTimeout(clearPostError, TOAST_DURATION_MS);
-    return () => clearTimeout(timer);
-  }, [postError, clearPostError]);
-
-  // ── Post creation ────────────────────────────────────────────────────────
   const handleCreatePost = useCallback(
     async (data: { content: string; images: string[]; linkUrl?: string }) => {
-      const confirmed = await addPostOptimistic({
+      await addPostOptimistic({
         content: data.content,
         author: authorAddress,
         images: data.images,
         linkUrl: data.linkUrl,
       });
-      // Track confirmed creation (after server response, not on optimistic add)
-      if (confirmed) {
-        trackPostCreated({
-          author: authorAddress ?? "anonymous",
-          contentLength: data.content.length,
-          hasMedia: data.images.length > 0,
-        });
-      }
     },
     [addPostOptimistic, authorAddress]
   );
@@ -196,3 +181,4 @@ export function FeedContainer({ authorAddress }: FeedContainerProps) {
     </div>
   );
 }
+

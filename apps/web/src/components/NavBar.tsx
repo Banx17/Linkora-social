@@ -19,7 +19,7 @@ import {
 
 import { Logo } from "@/components/branding/Logo";
 import { NotificationBell } from "@/components/NotificationBell";
-
+import { useFeatureFlag } from "@/lib/featureFlags";
 
 /** Truncates a Stellar address to G…XXXX format */
 function truncateAddress(address: string): string {
@@ -29,25 +29,42 @@ function truncateAddress(address: string): string {
 export function NavBar() {
   const router = useRouter();
   const { address, connected, network, connect, disconnect, isConnecting } = useWallet();
-  const { unreadCount } = useNotificationsContext();
-  const { registerComposeHandler, unregisterComposeHandler, registerSearchRef, openHelpModal } =
-    useKeyboardShortcutsContext();
+  const {
+    registerComposeHandler,
+    unregisterComposeHandler,
+    registerWalletHandler,
+    unregisterWalletHandler,
+    registerSearchRef,
+    openHelpModal,
+    openCommandPalette,
+  } = useKeyboardShortcutsContext();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isWalletModalOpen, setIsWalletModalOpen] = useState(false);
   const [showFreighterBanner, setShowFreighterBanner] = useState(false);
   const [theme, setTheme] = useState<ThemePreference>("light");
 
+  const darkModeEnabled = useFeatureFlag("dark-mode-toggle");
+  const commandPaletteEnabled = useFeatureFlag("command-palette");
+
   // Ref forwarded to SearchBar so the '/' shortcut can focus the input
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Register/unregister compose handler for the 'n' shortcut
+  // Register/unregister handlers for shortcuts and command palette
   useEffect(() => {
     registerComposeHandler(() => setIsModalOpen(true));
+    registerWalletHandler(() => setIsWalletModalOpen(true));
     registerSearchRef(searchInputRef as React.RefObject<HTMLInputElement | null>);
     return () => {
       unregisterComposeHandler();
+      unregisterWalletHandler();
     };
-  }, [registerComposeHandler, unregisterComposeHandler, registerSearchRef]);
+  }, [
+    registerComposeHandler,
+    unregisterComposeHandler,
+    registerWalletHandler,
+    unregisterWalletHandler,
+    registerSearchRef,
+  ]);
 
   // Initialize theme from storage
   useEffect(() => {
@@ -130,6 +147,7 @@ export function NavBar() {
         <div className="flex items-center gap-2 sm:gap-3">
           {connected && (
             <div className="hidden md:flex items-center gap-3">
+              {darkModeEnabled && (
               <button
                 onClick={toggleTheme}
                 className="rounded-lg p-1.5 text-[var(--text-muted)] hover:text-violet-400 transition-colors"
@@ -170,6 +188,7 @@ export function NavBar() {
                   </svg>
                 )}
               </button>
+              )}
               <Link
                 href="/analytics"
                 className="rounded-lg p-1.5 text-[var(--text-muted)] hover:text-violet-400 transition-colors"
@@ -215,6 +234,30 @@ export function NavBar() {
                   />
                 </svg>
               </Link>
+              {commandPaletteEnabled && (
+              <button
+                onClick={openCommandPalette}
+                className="hidden lg:flex items-center gap-1.5 px-2 py-1 text-xs text-[var(--text-muted)] border border-[var(--border)] rounded-lg hover:border-violet-500/50 hover:text-violet-400 transition-colors"
+                aria-label="Open command palette (⌘K)"
+                title="Command Palette (⌘K / Ctrl+K)"
+                data-testid="command-palette-entry"
+              >
+                <svg
+                  className="w-3.5 h-3.5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  strokeWidth={2}
+                  stroke="currentColor"
+                  aria-hidden="true"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                  />
+                </svg>
+                <span className="font-medium">⌘K</span>
+              </button>
               <button
                 onClick={openHelpModal}
                 className="rounded-lg p-1.5 text-[var(--text-muted)] hover:text-violet-400 transition-colors"
@@ -238,6 +281,7 @@ export function NavBar() {
                   />
                 </svg>
               </button>
+              )}
               <NotificationBell />
             </div>
           )}
