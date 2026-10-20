@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LinkoraClient } from "../../../../packages/sdk/src/client";
 import type { Profile, Post } from "../../../../packages/sdk/src/types";
+import type { VerificationLevel } from "@/lib/verification";
 
 /* ────────────────────────────────────────────────────────────────────────── */
 /*  Types                                                                    */
@@ -18,6 +19,10 @@ export interface ProfileData {
   postsHasMore: boolean;
   creatorTokenBalance: string | null;
   totalTipsReceived: number;
+  /** True when the account holds a valid on-chain attestation. */
+  isVerified: boolean;
+  /** Verification provenance, or null when the account is not verified. */
+  verificationLevel: VerificationLevel | null;
 }
 
 /** Shape returned by the indexer /posts endpoint (serialised as strings). */
@@ -82,7 +87,23 @@ export function useProfile(address: string, currentUserAddress?: string | null) 
         return;
       }
 
-      // 2. Followers / following from the indexer
+      // 2. Verification status from on-chain attestations.
+      //    An account is considered verified when the contract has recorded
+      //    at least one analytics attestation for it. Failures are non-fatal
+      //    so a flaky RPC never blocks the profile from rendering.
+      let isVerified = false;
+      let verificationLevel: VerificationLevel | null = null;
+      try {
+        const attestation = await client.getAnalyticsAttestation(address);
+        if (attestation) {
+          isVerified = true;
+          verificationLevel = "identity";
+        }
+      } catch (err) {
+        console.warn("On-chain attestation lookup failed, treating as unverified", err);
+      }
+
+      // 3. Followers / following from the indexer
       //    Endpoints per openapi.yaml:
       //      GET /api/follows/{address}/followers
       //      GET /api/follows/{address}/following
@@ -124,7 +145,7 @@ export function useProfile(address: string, currentUserAddress?: string | null) 
         console.warn("Indexer follow data fetch failed, using defaults", err);
       }
 
-      // 3. Posts from the indexer
+      // 4. Posts from the indexer
       //    GET /api/posts?author={address}&limit=20&offset=0
       let posts: IndexerPost[] = [];
       let postsTotal = 0;
@@ -149,7 +170,7 @@ export function useProfile(address: string, currentUserAddress?: string | null) 
 
       postsOffsetRef.current = posts.length;
 
-      // 4. Creator token balance
+      // 5. Creator token balance
       let creatorTokenBalance: string | null = null;
       if (profile.creator_token && profile.creator_token !== address) {
         // In production this would call Horizon or a SAC balance method.
@@ -169,6 +190,8 @@ export function useProfile(address: string, currentUserAddress?: string | null) 
           postsHasMore,
           creatorTokenBalance,
           totalTipsReceived,
+          isVerified,
+          verificationLevel,
         },
       });
     } catch (error) {
