@@ -374,6 +374,60 @@ The script manages its own throwaway container (`docker-compose.migrations.yml`)
 
 ---
 
+## Third-party scripts
+
+Scripts loaded from other origins are the single biggest source of main-thread jank and
+of privacy surprises, so they follow a strict policy.
+
+### Load third-party code through `next/script`
+
+Never add a bare `<script src="…">` tag. Use the component in
+`apps/web/src/components/ThirdPartyScripts.tsx`, which pins every script to the lowest
+priority it can get away with:
+
+| Priority            | Use it for                                              | Why                                                       |
+| ------------------- | ------------------------------------------------------- | --------------------------------------------------------- |
+| `beforeInteractive` | Wallet SDK — the app is unusable until it exists        | Hoisted into `<head>`, fetched before hydration           |
+| `afterInteractive`  | Analytics, chat widgets                                 | Loaded once the page is usable; never blocks first paint   |
+| `lazyOnload`        | IPFS pinning, web-vitals beacons, "nice to have" embeds | Idle-time only; never competes with app code for bandwidth |
+
+Existing cases: wallet SDK → `beforeInteractive`, analytics → `afterInteractive`,
+IPFS/vitals helpers → `lazyOnload`. The inline theme bootstrap in `app/layout.tsx` is
+intentionally **not** a third-party script: it is inlined precisely so it cannot add a
+network round-trip before first paint.
+
+### Keep scripts opt-in
+
+Each script is gated behind a `NEXT_PUBLIC_*` URL:
+
+| Env var                            | Priority            |
+| ---------------------------------- | ------------------- |
+| `NEXT_PUBLIC_WALLET_SDK_URL`       | `beforeInteractive` |
+| `NEXT_PUBLIC_ANALYTICS_SCRIPT_URL` | `afterInteractive`  |
+| `NEXT_PUBLIC_IPFS_SCRIPT_URL`      | `lazyOnload`        |
+
+Self-hosted deployments must never be forced to call a vendor they did not configure, so
+an unset variable means "do not load this script at all".
+
+### Ship connection hints with the scripts
+
+Origins the app is guaranteed to talk to are warmed up in `app/layout.tsx` with
+`<link rel="preconnect">` (and `dns-prefetch` as a fallback). Add a hint whenever you add
+a new first-party origin that is hit on most page loads — TLS and DNS setup are the
+expensive parts of the first RPC call. Keep the list short: hinting too many origins makes
+every hint less effective.
+
+### Checklist for a new third-party script
+
+1. Is it really necessary? Prefer a first-party implementation or a server-side call.
+2. Give it the lowest priority that still works (`lazyOnload` > `afterInteractive` >
+   `beforeInteractive`).
+3. Gate it behind a `NEXT_PUBLIC_*` env var and document the variable.
+4. Add the origin to the preconnect list if it is on the critical path.
+5. Note the change in the pull request so reviewers can weigh the performance cost.
+
+---
+
 ## Branch Naming
 
 | Prefix   | Use for                             |
