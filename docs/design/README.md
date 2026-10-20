@@ -1,5 +1,9 @@
 # Linkora Component Library
 
+> **Companion document:** [`COMPONENT_INVENTORY.md`](./COMPONENT_INVENTORY.md) — full per-component props tables, accessibility notes, and usage snippets.
+>
+> This README is the high-level overview; the inventory is the exhaustive reference.
+>
 > **Figma file:** _[Link to published Figma file — to be added when file is published]_
 >
 > All reusable UI components for the Linkora SocialFi web application.
@@ -11,6 +15,7 @@
 
 | Section                               | Contents                                                                   |
 | ------------------------------------- | -------------------------------------------------------------------------- |
+| [Component inventory](#component-inventory) | Index of every component in `apps/web/src/components/`               |
 | [Design tokens](#design-tokens)       | Color, type, spacing, and shadow variables                                 |
 | [Atoms](#atoms)                       | Button, Input, Textarea, Badge, Avatar, Spinner, Icon                      |
 | [Molecules](#molecules)               | Post card, Profile card, Pool card, Transaction status, Toast, Modal shell |
@@ -20,9 +25,46 @@
 
 ---
 
+## Component inventory
+
+The full inventory lives in [`COMPONENT_INVENTORY.md`](./COMPONENT_INVENTORY.md). It documents every reusable component under `apps/web/src/components/` with:
+
+- Name, description, and mockup reference
+- Props table (name, type, default, required)
+- Variants and states
+- Accessibility notes (roles, ARIA attributes, keyboard behavior)
+- Copy-pasteable usage snippet
+- Do / Don't guidance
+
+| Component         | File                                              | Category  | Inventory section                                                    |
+| ----------------- | ------------------------------------------------- | --------- | -------------------------------------------------------------------- |
+| Button            | `apps/web/src/components/Button.tsx`              | Atom      | [Button](./COMPONENT_INVENTORY.md#button)                            |
+| Input             | `apps/web/src/components/Input.tsx`               | Atom      | [Input](./COMPONENT_INVENTORY.md#input)                              |
+| Textarea          | `apps/web/src/components/Textarea.tsx`            | Atom      | [Textarea](./COMPONENT_INVENTORY.md#textarea)                        |
+| Badge             | `apps/web/src/components/Badge.tsx`               | Atom      | [Badge](./COMPONENT_INVENTORY.md#badge)                              |
+| Avatar            | `apps/web/src/components/Avatar.tsx`              | Atom      | [Avatar](./COMPONENT_INVENTORY.md#avatar)                            |
+| Spinner           | `apps/web/src/components/Spinner.tsx`             | Atom      | [Spinner](./COMPONENT_INVENTORY.md#spinner)                          |
+| PostCard          | `apps/web/src/components/PostCard.tsx`            | Molecule  | [Post card](./COMPONENT_INVENTORY.md#post-card)                      |
+| ProfileCard       | `apps/web/src/components/ProfileCard.tsx`         | Molecule  | [Profile card](./COMPONENT_INVENTORY.md#profile-card)                |
+| PoolCard          | `apps/web/src/components/PoolCard.tsx`            | Molecule  | [Pool card](./COMPONENT_INVENTORY.md#pool-card)                      |
+| TransactionStatus | `apps/web/src/components/TransactionStatus.tsx`   | Molecule  | [Transaction status](./COMPONENT_INVENTORY.md#transaction-status)    |
+| Toast             | `apps/web/src/components/Toast.tsx`               | Molecule  | [Toast notification](./COMPONENT_INVENTORY.md#toast-notification)    |
+| Modal             | `apps/web/src/components/Modal.tsx`               | Molecule  | [Modal shell](./COMPONENT_INVENTORY.md#modal-shell)                  |
+| FeedList          | `apps/web/src/components/FeedList.tsx`            | Organism  | [Feed list](./COMPONENT_INVENTORY.md#feed-list)                      |
+| NavigationBar     | `apps/web/src/components/NavigationBar.tsx`       | Organism  | [Navigation bar](./COMPONENT_INVENTORY.md#navigation-bar)            |
+| WalletConnectHeader | `apps/web/src/components/WalletConnectHeader.tsx` | Organism | [Wallet connect header](./COMPONENT_INVENTORY.md#wallet-connect-header) |
+| TipModal          | `apps/web/src/components/TipModal.tsx`            | Organism  | [Tip modal](./COMPONENT_INVENTORY.md#tip-modal)                      |
+| ComposeModal      | `apps/web/src/components/ComposeModal.tsx`        | Organism  | [Compose modal](./COMPONENT_INVENTORY.md#compose-modal)              |
+
+> When adding a new component, add a row here **and** a full section in `COMPONENT_INVENTORY.md`. CI checks that every file in `apps/web/src/components/` is listed.
+
+---
+
 ## Design tokens
 
 All tokens are defined as CSS custom properties in [`tokens.css`](./tokens.css) and as a JSON object in [`tokens.json`](./tokens.json). Reference them exclusively — never hard-code hex values in component code.
+
+> **Single source of truth:** `tokens.json` is the canonical token definition. `tokens.css` is generated from it. The tables below are a human-readable mirror — if they disagree with `tokens.json`, `tokens.json` wins. See [`COMPONENT_INVENTORY.md#design-tokens`](./COMPONENT_INVENTORY.md#design-tokens) for the full token → CSS variable mapping.
 
 ### Color
 
@@ -347,6 +389,8 @@ New post form inside the Modal shell.
 
 Dark mode activates when `data-theme="dark"` is set on `<html>`. Override the following tokens:
 
+> **Implementation:** `ThemeProvider` (`apps/web/src/providers/ThemeProvider.tsx`) sets `data-theme` on `<html>` and persists the choice to `localStorage` under `linkora:theme`. It respects `prefers-color-scheme` when no explicit choice is stored. See [`COMPONENT_INVENTORY.md#theming`](./COMPONENT_INVENTORY.md#theming) for the full theming guide.
+
 | Token                    | Dark value |
 | ------------------------ | ---------- |
 | `--color-bg`             | `#0D0D12`  |
@@ -359,6 +403,10 @@ Dark mode activates when `data-theme="dark"` is set on `<html>`. Override the fo
 | `--color-text-disabled`  | `#4B5563`  |
 
 All other brand and semantic tokens remain the same in dark mode to preserve contrast ratios.
+
+### Theming
+
+Components must consume tokens via `var(--token-name)` and never branch on theme in JS. To add a new themeable value, add the light value to `:root` in `tokens.css`, the dark override to `[data-theme="dark"]`, and both to `tokens.json`. See the [Theming section of the inventory](./COMPONENT_INVENTORY.md#theming) for a worked example.
 
 ---
 
@@ -418,4 +466,4 @@ GABC…1234  ⎘
 
 ---
 
-_Last updated by issue #163 — initial component library specification._
+_Last updated by issue #163 — initial component library specification. Component inventory added in `COMPONENT_INVENTORY.md`._
