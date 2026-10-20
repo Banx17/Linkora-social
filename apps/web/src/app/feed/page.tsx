@@ -3,191 +3,70 @@
 /**
  * /feed — main feed page with "For You" and "Following" tabs.
  *
- * Fix for issue #1580:
- *  - Removed the broken Server Component shell that referenced undeclared
- *    identifiers (followingRes, allFetchedPosts) and non-existent modules
- *    (@/lib/auth, @/lib/persist, @/lib/posts, @/lib/following, @/constants,
- *    @/config.indexerUrl).
- *  - Replaced with a client component that owns both feed tabs and performs
- *    the fan-out fetch correctly (Promise.all awaited and consumed).
- *  - setPosts / persistFeed called exactly once per successful fetch.
- *  - Cursor is kept independently per tab so switching tabs does not reset
- *    the other tab's pagination state.
+ * Issue #1736: the first paint no longer blocks on the indexer. `FeedStream`
+ * reads its snapshot with React 19's `use()` hook, so React renders the
+ * `<Suspense>` fallback while the request is in flight and swaps in post cards
+ * as soon as it resolves.
  *
- * Issue #1724 adds:
- *  - IntersectionObserver-driven infinite scroll (with a manual button
- *    fallback for slow connections and browsers without the observer),
- *  - skeletons for the next page that reserve layout space (no CLS),
- *  - a "Return to top" FAB,
- *  - polite aria-live announcements for appended pages.
+ * Issue #1724 adds, on top of that streamed first page: cursor pagination with
+ * IntersectionObserver-driven infinite scroll (and a manual "Load more"
+ * fallback on slow connections), a "Return to top" FAB, and polite
+ * announcements for appended pages. Those live in `FeedList`.
  *
- * Pagination state lives in `useInfiniteFeed`, a local cursor-based hook. The
- * repo has no TanStack Query provider and the issue forbids new dependencies,
- * so the hook intentionally mirrors `useInfiniteQuery`'s API.
+ * Behaviour preserved from the #1580 rewrite:
+ *  - Switching tabs shows only the active tab's posts.
+ *  - A missing wallet address shows a helpful error on the Following tab.
+ *  - Pagination appends to the current tab's list.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
+
 import { useWallet } from "@/hooks/useWallet";
-import { PostCard, type Post } from "@/components/PostCard";
-import { PostCardSkeleton } from "@/components/PostCard";
-import { InfiniteScroll } from "@/components/InfiniteScroll";
 import { ReturnToTop } from "@/components/ReturnToTop";
-import { useInfiniteFeed, type CursorPage } from "@/hooks/useInfiniteFeed";
-import { useSlowConnection } from "@/hooks/useSlowConnection";
+import { FeedSkeleton } from "./FeedList";
+import { FeedStream } from "./FeedStream";
+import { getFeedSnapshotPromise, type FeedSnapshot, type FeedTab } from "@/services/feed";
 
-const INDEXER_URL = process.env.NEXT_PUBLIC_INDEXER_URL ?? "http://localhost:3001";
-const PAGE_SIZE = 20;
-
-type FeedTab = "for-you" | "following";
-
-// Stable identity functions so page de-duplication does not re-run needlessly.
-const getPostId = (post: Post) => post.id;
-
-// ---------------------------------------------------------------------------
-// Data-fetching helpers
-// ---------------------------------------------------------------------------
-
-/** Fetch the global / "For You" feed from the indexer. */
-async function fetchForYouPage(cursor: string | null): Promise<{
-  posts: Post[];
-  nextCursor: string | null;
-}> {
-  const cursorQuery = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
-  const res = await fetch(`${INDEXER_URL}/api/posts?limit=${PAGE_SIZE}${cursorQuery}`);
-  if (!res.ok) throw new Error(`Indexer returned ${res.status}`);
-  const data = await res.json();
-  const posts: Post[] = data.posts ?? [];
-  return { posts, nextCursor: data.cursor ?? null };
+interface FeedRequest {
+  key: string;
+  tab: FeedTab;
+  address: string | null;
+  promise: Promise<FeedSnapshot>;
 }
-
-/**
- * Fetch the Following feed for a given user address.
- *
- * Strategy:
- *  1. Fetch the user's following list (paginated by cursor).
- *  2. Fan out one GET /api/posts?author=<addr> per followee in parallel.
- *  3. Merge, sort by timestamp desc, return the first PAGE_SIZE entries.
- */
-async function fetchFollowingPage(
-  userAddress: string,
-  cursor: string | null
-): Promise<{ posts: Post[]; nextCursor: string | null }> {
-  const cursorQuery = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
-  const followingRes = await fetch(
-    `${INDEXER_URL}/api/feed/following/${userAddress}?limit=${PAGE_SIZE}${cursorQuery}`
-  );
-  if (!followingRes.ok) throw new Error("Failed to fetch following list");
-  const followingData = await followingRes.json();
-  const followingList: string[] = followingData.following ?? [];
-  const nextCursor: string | null = followingData.cursor ?? null;
-
-  if (followingList.length === 0) {
-    return { posts: [], nextCursor: null };
-  }
-
-  // Fan out in parallel — await the full array.
-  const postsArrays = await Promise.all(
-    followingList.map(async (addr) => {
-      const postsRes = await fetch(
-        `${INDEXER_URL}/api/posts?author=${encodeURIComponent(addr)}&limit=${PAGE_SIZE}`
-      );
-      if (!postsRes.ok) return [] as Post[];
-      const data = await postsRes.json();
-      return (data.posts ?? []) as Post[];
-    })
-  );
-
-  const allPosts = postsArrays
-    .flat()
-    .sort((a, b) => Number(b.timestamp ?? 0) - Number(a.timestamp ?? 0))
-    .slice(0, PAGE_SIZE);
-
-  return { posts: allPosts, nextCursor };
-}
-
-// ---------------------------------------------------------------------------
-// Page component
-// ---------------------------------------------------------------------------
 
 export default function FeedPage() {
   const { address: userAddress } = useWallet();
   const [activeTab, setActiveTab] = useState<FeedTab>("for-you");
-  const isSlowConnection = useSlowConnection();
-
-  // Announced by a visually hidden aria-live region after a page is appended.
-  const [announcement, setAnnouncement] = useState("");
-  // Item count before the in-flight "next page" request; null when idle.
-  const announceBaselineRef = useRef<number | null>(null);
   // Focus target for the return-to-top FAB.
   const topRef = useRef<HTMLElement>(null);
 
-  const forYouQuery = useInfiniteFeed<Post>({
-    queryKey: ["feed", "for-you"],
-    queryFn: async (cursor): Promise<CursorPage<Post>> => {
-      const { posts, nextCursor } = await fetchForYouPage(cursor);
-      return { items: posts, nextCursor };
-    },
-    getItemId: getPostId,
-  });
+  const requestKey = `${activeTab}:${userAddress ?? "anonymous"}`;
 
-  const followingNeedsWallet = activeTab === "following" && !userAddress;
+  /*
+    The snapshot promise is created here (and owned by this committed state)
+    rather than inside `FeedStream`. A component that suspends has its
+    in-progress state discarded, so a promise created during that render would
+    be recreated on every retry — an endless request loop. The page itself never
+    suspends, so this promise survives the child's retries and is replaced when
+    the tab or wallet changes.
+  */
+  const [request, setRequest] = useState<FeedRequest | null>(null);
 
-  const followingQuery = useInfiniteFeed<Post>({
-    queryKey: ["feed", "following", userAddress ?? "disconnected"],
-    queryFn: async (cursor): Promise<CursorPage<Post>> => {
-      if (!userAddress) return { items: [], nextCursor: null };
-      const { posts, nextCursor } = await fetchFollowingPage(userAddress, cursor);
-      return { items: posts, nextCursor };
-    },
-    enabled: activeTab === "following" && Boolean(userAddress),
-    getItemId: getPostId,
-  });
-
-  const feed = activeTab === "for-you" ? forYouQuery : followingQuery;
-  const { items, isFetchingNextPage, hasNextPage, fetchNextPage, retry } = feed;
-
-  const handleLoadMore = useCallback(() => {
-    if (isFetchingNextPage || !hasNextPage || feed.isError) return;
-
-    announceBaselineRef.current = items.length;
-    fetchNextPage();
-  }, [feed.isError, fetchNextPage, hasNextPage, isFetchingNextPage, items.length]);
-
-  const handleRetry = useCallback(() => {
-    if (isFetchingNextPage) return;
-
-    announceBaselineRef.current = items.length;
-    retry();
-  }, [isFetchingNextPage, items.length, retry]);
-
-  // Announce only appended pages: never the initial page, never a page twice,
-  // and not a failed request (the inline retry describes the failure itself).
   useEffect(() => {
-    const baseline = announceBaselineRef.current;
-    if (baseline === null || isFetchingNextPage) return;
+    setRequest({
+      key: requestKey,
+      tab: activeTab,
+      address: userAddress,
+      promise: getFeedSnapshotPromise(activeTab, userAddress),
+    });
+  }, [requestKey, activeTab, userAddress]);
 
-    announceBaselineRef.current = null;
-
-    if (feed.isError || items.length <= baseline) return;
-    const added = items.length - baseline;
-    setAnnouncement(`${added} more ${added === 1 ? "post" : "posts"} loaded`);
-  }, [feed.isError, isFetchingNextPage, items.length]);
+  const activeRequest = request?.key === requestKey ? request : null;
 
   const handleTabChange = (tab: FeedTab) => {
     if (tab === activeTab) return;
     setActiveTab(tab);
-    setAnnouncement("");
-    announceBaselineRef.current = null;
   };
-
-  const feedErrorMessage = followingNeedsWallet
-    ? "Connect your wallet to see your Following feed."
-    : feed.isError && items.length === 0
-      ? (feed.error?.message ?? "Failed to load feed. Please try again.")
-      : null;
-
-  const showInitialSkeleton = feed.isLoading && items.length === 0;
-  const showEmptyState = !showInitialSkeleton && items.length === 0 && !feedErrorMessage;
 
   return (
     <>
@@ -198,20 +77,6 @@ export default function FeedPage() {
         aria-label="Feed"
         className="mx-auto max-w-2xl px-4 py-6 pb-24 md:pb-6"
       >
-        {/*
-          Visually hidden live region. The initial page is never announced;
-          only appended pages write text here.
-        */}
-        <div
-          className="sr-only"
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-          data-testid="feed-announcer"
-        >
-          {announcement}
-        </div>
-
         {/* Tab switcher */}
         <div
           role="tablist"
@@ -247,47 +112,18 @@ export default function FeedPage() {
           aria-labelledby={`tab-${activeTab}`}
           data-testid={`tabpanel-${activeTab}`}
         >
-          {feedErrorMessage && (
-            <div
-              role="alert"
-              className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-400"
-              data-testid="feed-error"
-            >
-              {feedErrorMessage}
-            </div>
-          )}
-
-          {showInitialSkeleton ? (
-            <div data-testid="loading-indicator" className="space-y-4">
-              <PostCardSkeleton />
-              <PostCardSkeleton />
-              <PostCardSkeleton />
-            </div>
-          ) : showEmptyState ? (
-            <div className="py-16 text-center text-[var(--text-muted)]" data-testid="empty-feed">
-              {activeTab === "following"
-                ? "Follow some accounts to see their posts here."
-                : "No posts yet. Be the first to share something!"}
-            </div>
-          ) : (
-            <div className="space-y-4" data-testid="post-list">
-              {items.map((post) => (
-                <PostCard key={post.id} post={post} />
-              ))}
-
-              <InfiniteScroll
-                key="infinite-scroll"
-                onLoadMore={handleLoadMore}
-                onRetry={handleRetry}
-                hasMore={hasNextPage && !followingNeedsWallet}
-                isLoading={isFetchingNextPage}
-                disabled={followingNeedsWallet}
-                manual={isSlowConnection}
-                error={feed.isError}
-                skeleton={<PostCardSkeleton />}
+          <Suspense fallback={<FeedSkeleton />}>
+            {activeRequest ? (
+              <FeedStream
+                key={activeRequest.key}
+                tab={activeRequest.tab}
+                address={activeRequest.address}
+                promise={activeRequest.promise}
               />
-            </div>
-          )}
+            ) : (
+              <FeedSkeleton />
+            )}
+          </Suspense>
         </section>
       </main>
 

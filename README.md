@@ -93,24 +93,32 @@ schema snapshot after an intentional change.
 ---
 
 ## Documentation
+The complete, organized documentation index lives at [`docs/INDEX.md`](./docs/INDEX.md) — start there for a full table of contents covering Getting Started, Architecture, Smart Contracts, SDK, Backend Services, Frontend, Mini Apps, Security, and Release & Deployment.
+
 
 | Document                                                         | Description                                               |
 | ---------------------------------------------------------------- | --------------------------------------------------------- |
+| [Documentation Index](./docs/INDEX.md)                           | Master table of contents for all developer docs           |
 | [Contract API Reference](./docs/CONTRACT_API.md)                 | Full function reference, storage layout, and event schema |
+| [SDK Reference](./docs/SDK_REFERENCE.md)                         | Typed TypeScript client, transaction queue, and event API |
 | [Contract Archival ADR](./docs/adr/ADR-002-tombstone-archival.md) | Tombstone lifecycle, cleanup permissions, and rent policy |
 | [System Architecture](./docs/ARCHITECTURE.md)                    | Component overview and data flows                         |
 | [Design System](./docs/design/README.md)                         | UI/UX specifications and brand identity                   |
 | [Mobile UI Spec](./docs/design/MOBILE_SPEC.md)                   | Screen inventory, components, tokens, accessibility       |
 | [Mobile Developer Guide](./docs/mobile/DEVELOPER_GUIDE.md)       | Expo setup, simulators, EAS builds                        |
 | [Indexer Design](./docs/indexer/INDEXER_DESIGN.md)               | Event indexing strategy and search API                    |
+| [Indexer OpenAPI Spec](./docs/api/indexer.openapi.yaml)           | REST API schema, authentication, and response definitions  |
 | [Indexer Migrations](./services/indexer/migrations/README.md)    | Migration rules, reversibility policy, and testing        |
 | [Mini Apps Developer Guide](./docs/mini-apps/DEVELOPER_GUIDE.md) | Build and submit a Linkora mini app                       |
 | [Mini Apps Bridge API](./docs/mini-apps/BRIDGE_API.md)           | Bridge method reference                                   |
 | [Security Policy](./SECURITY.md)                                 | Vulnerability disclosure guidance                         |
+| [Security Audit Reference](./docs/SECURITY_AUDIT.md)            | Threat model, pre-deployment checklist, and incident response runbook |
 
 ---
 
 ## Contributing
+New to the project? Read [`docs/INDEX.md`](./docs/INDEX.md) first — it is the primary entry point for all developer documentation.
+
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for how to set up your environment, branch conventions, and the PR process.
 

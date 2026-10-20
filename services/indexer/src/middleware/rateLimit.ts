@@ -325,6 +325,17 @@ export class RateLimiter {
     return count <= limit;
   }
 
+  async isAllowedAsyncWithCount(
+    key: string,
+    limit: number
+  ): Promise<{ allowed: boolean; count: number }> {
+    if (!this.store) {
+      return { allowed: this.isAllowed(key, limit), count: this.getRequestCount(key) };
+    }
+    const count = await this.store.addAndCount(key, Date.now(), WINDOW_MS);
+    return { allowed: count <= limit, count };
+  }
+
   async getRemainingTimeAsync(key: string): Promise<number> {
     if (!this.store) {
       return this.getRemainingTime(key);
@@ -490,15 +501,22 @@ export function rateLimitRead(req: Request, res: Response, next: NextFunction): 
   const limit = req.context?.stellarAddress ? RATE_LIMIT_AUTH_RPM : RATE_LIMIT_ANON_RPM;
 
   limiter
-    .isAllowedAsync(key, limit)
-    .then(async (allowed) => {
+    .isAllowedAsyncWithCount(key, limit)
+    .then(async ({ allowed, count }) => {
+      const remaining = Math.max(0, limit - count);
+      const resetMs = await limiter.getRemainingTimeAsync(key);
+      const resetUnix = Math.ceil((Date.now() + resetMs) / 1000);
+
+      res.set("RateLimit-Limit", String(limit));
+      res.set("RateLimit-Remaining", String(remaining));
+      res.set("RateLimit-Reset", String(resetUnix));
+
       if (allowed) {
         next();
         return;
       }
 
-      const retryAfterMs = await limiter.getRemainingTimeAsync(key);
-      const retryAfterSeconds = Math.ceil(retryAfterMs / 1000);
+      const retryAfterSeconds = Math.ceil(resetMs / 1000);
 
       logger.warn(
         {
@@ -529,15 +547,22 @@ export function rateLimitWrite(req: Request, res: Response, next: NextFunction):
   const limit = req.context?.stellarAddress ? RATE_LIMIT_AUTH_RPM : RATE_LIMIT_WRITE_RPM;
 
   limiter
-    .isAllowedAsync(key, limit)
-    .then(async (allowed) => {
+    .isAllowedAsyncWithCount(key, limit)
+    .then(async ({ allowed, count }) => {
+      const remaining = Math.max(0, limit - count);
+      const resetMs = await limiter.getRemainingTimeAsync(key);
+      const resetUnix = Math.ceil((Date.now() + resetMs) / 1000);
+
+      res.set("RateLimit-Limit", String(limit));
+      res.set("RateLimit-Remaining", String(remaining));
+      res.set("RateLimit-Reset", String(resetUnix));
+
       if (allowed) {
         next();
         return;
       }
 
-      const retryAfterMs = await limiter.getRemainingTimeAsync(key);
-      const retryAfterSeconds = Math.ceil(retryAfterMs / 1000);
+      const retryAfterSeconds = Math.ceil(resetMs / 1000);
 
       logger.warn(
         {

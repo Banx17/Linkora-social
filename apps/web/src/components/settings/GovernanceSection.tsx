@@ -152,7 +152,6 @@ export function GovernanceSection({ address }: GovernanceSectionProps) {
 
     try {
       const client = getGovernanceClient();
-      const xdr = client.govVote(walletAddress, BigInt(proposalId), support);
 
       await buildSignAndSubmit(
         "gov_vote",

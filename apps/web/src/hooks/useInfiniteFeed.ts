@@ -34,6 +34,12 @@ export interface UseInfiniteFeedOptions<T extends { id: string | number }> {
   queryFn: (cursor: string | null) => Promise<CursorPage<T>>;
   /** When false the query is idle and nothing is fetched. */
   enabled?: boolean;
+  /**
+   * A page that is already loaded by the caller (for example a first page
+   * streamed in with React 19's `use()`). It seeds the cache instead of being
+   * fetched again, so the feed still issues exactly one request per page.
+   */
+  initialPage?: CursorPage<T>;
   /** Optional id accessor; defaults to `item.id`. */
   getItemId?: (item: T) => string | number;
 }
@@ -62,6 +68,7 @@ export function useInfiniteFeed<T extends { id: string | number }>({
   queryKey,
   queryFn,
   enabled = true,
+  initialPage,
   getItemId,
 }: UseInfiniteFeedOptions<T>): UseInfiniteFeedResult<T> {
   // Serialising the key keeps the reset effect stable even when callers pass a
@@ -72,9 +79,13 @@ export function useInfiniteFeed<T extends { id: string | number }>({
   queryFnRef.current = queryFn;
   const getItemIdRef = useRef(getItemId);
   getItemIdRef.current = getItemId;
+  // Read by the reset effect only, so a new `initialPage` object on every
+  // parent render cannot re-trigger the reset.
+  const initialPageRef = useRef(initialPage);
+  initialPageRef.current = initialPage;
 
-  const [pages, setPages] = useState<CursorPage<T>[]>([]);
-  const [isLoading, setIsLoading] = useState(enabled);
+  const [pages, setPages] = useState<CursorPage<T>[]>(() => (initialPage ? [initialPage] : []));
+  const [isLoading, setIsLoading] = useState(enabled && !initialPage);
   const [isFetchingNextPage, setIsFetchingNextPage] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
@@ -124,11 +135,15 @@ export function useInfiniteFeed<T extends { id: string | number }>({
     generationRef.current = generation;
     inFlightRef.current = null;
 
-    setPages([]);
+    // Re-seed with the caller-provided page instead of discarding it: when the
+    // first page was already streamed in, fetching it again would duplicate
+    // both the request and the list.
+    const seed = initialPageRef.current;
+    setPages(seed ? [seed] : []);
     setError(null);
     setIsFetchingNextPage(false);
 
-    if (!enabled) {
+    if (!enabled || seed) {
       setIsLoading(false);
       return;
     }
