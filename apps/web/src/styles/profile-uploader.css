@@ -1,0 +1,25 @@
+/* Styling for react-image-crop inside the profile image uploader dialog. */
+.ProfileImageUploader-crop .ReactCrop__crop-selection {
+  border: 2px solid var(--color-primary, #7c3aed);
+}
+
+.ProfileImageUploader-crop .ReactCrop__drag-handle::after {
+  background-color: var(--color-primary, #7c3aed);
+  border-color: var(--color-primary, #7c3aed);
+}
+
+.ProfileImageUploader-crop .ord-n {
+  cursor: ns-resize;
+}
+
+.ProfileImageUploader-crop .ord-s {
+  cursor: ns-resize;
+}
+
+.ProfileImageUploader-crop .ord-e {
+  cursor: ew-resize;
+}
+
+.ProfileImageUploader-crop .ord-w {
+  cursor: ew-resize;
+}

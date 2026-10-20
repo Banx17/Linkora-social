@@ -186,6 +186,9 @@ importers:
       react-dom:
         specifier: ^19.0.0
         version: 19.2.7(react@19.2.7)
+      react-image-crop:
+        specifier: ^11.1.2
+        version: 11.1.2(react@19.2.7)
       react-textarea-autosize:
         specifier: ^8.5.9
         version: 8.5.9(@types/react@19.2.16)(react@19.2.7)
@@ -11059,6 +11062,14 @@ packages:
     engines: { node: ">=10" }
     peerDependencies:
       react: ">=17.0.0"
+
+  react-image-crop@11.1.2:
+    resolution:
+      {
+        integrity: sha512-+0Pc2fxpwKL4u4oLmdKBw8XSwUceFbXbKEHvFOlsl/MGB1OVNic4uBlAPmEHGXYgoJIq+b63xHbc/aJMG0AVkA==,
+      }
+    peerDependencies:
+      react: ">=16.13.1"
 
   react-is@16.13.1:
     resolution:
@@ -22382,6 +22393,10 @@ snapshots:
   react-freeze@1.0.4(react@19.2.3):
     dependencies:
       react: 19.2.3
+
+  react-image-crop@11.1.2(react@19.2.7):
+    dependencies:
+      react: 19.2.7
 
   react-is@16.13.1: {}
 
