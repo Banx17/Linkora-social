@@ -141,8 +141,6 @@ export function GovernanceSection({ address }: GovernanceSectionProps) {
     loadProposals();
   }, [address]);
 
-  }, [address]);
-
   async function handleVote(proposalId: string, support: boolean) {
     if (!walletAddress) {
       setVoteError({ ...voteError, [proposalId]: "Please connect your wallet to vote" });
