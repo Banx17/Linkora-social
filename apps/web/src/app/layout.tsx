@@ -10,6 +10,7 @@ import { ThemeBootstrap } from "@/components/ThemeBootstrap";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { KeyboardShortcutsProvider } from "@/contexts/KeyboardShortcutsContext";
 import { KeyboardShortcutsModal } from "@/components/KeyboardShortcutsModal";
+import { CommandPalette } from "@/components/CommandPalette";
 import { ServiceWorkerRegistration } from "@/components/ServiceWorkerRegistration";
 import { ResourceHints, ThirdPartyScripts } from "@/components/ThirdPartyScripts";
 
@@ -50,6 +51,7 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
                 </main>
                 <GuidedTour />
                 <KeyboardShortcutsModal />
+                <CommandPalette />
               </NotificationsProvider>
             </GuidedTourProvider>
           </OnboardingProvider>

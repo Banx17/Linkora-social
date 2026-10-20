@@ -36,10 +36,21 @@ export interface KeyboardShortcutsContextValue {
   openHelpModal: () => void;
   closeHelpModal: () => void;
 
+  /** Whether the `⌘K / Ctrl+K` command palette is open. */
+  isCommandPaletteOpen: boolean;
+  openCommandPalette: () => void;
+  closeCommandPalette: () => void;
+  toggleCommandPalette: () => void;
+
   /** Called by NavBar to let the shortcut system open the Compose modal. */
   onOpenCompose: (() => void) | null;
   registerComposeHandler: (handler: () => void) => void;
   unregisterComposeHandler: () => void;
+
+  /** Called by NavBar to let the shortcut system open the Wallet modal. */
+  onOpenWallet: (() => void) | null;
+  registerWalletHandler: (handler: () => void) => void;
+  unregisterWalletHandler: () => void;
 
   /**
    * Called by SearchBar to register its input ref.
@@ -54,9 +65,16 @@ const KeyboardShortcutsContext = createContext<KeyboardShortcutsContextValue>({
   isHelpModalOpen: false,
   openHelpModal: () => {},
   closeHelpModal: () => {},
+  isCommandPaletteOpen: false,
+  openCommandPalette: () => {},
+  closeCommandPalette: () => {},
+  toggleCommandPalette: () => {},
   onOpenCompose: null,
   registerComposeHandler: () => {},
   unregisterComposeHandler: () => {},
+  onOpenWallet: null,
+  registerWalletHandler: () => {},
+  unregisterWalletHandler: () => {},
   registerSearchRef: () => {},
 });
 
@@ -99,9 +117,11 @@ export function KeyboardShortcutsProvider({ children }: { children: React.ReactN
   const { address } = useWallet();
 
   const [isHelpModalOpen, setIsHelpModalOpen] = useState(false);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
 
   // Refs for cross-component communication (avoid stale closures)
   const composeHandlerRef = useRef<(() => void) | null>(null);
+  const walletHandlerRef = useRef<(() => void) | null>(null);
   const searchInputRef = useRef<React.RefObject<HTMLInputElement | null> | null>(null);
 
   // Pending first key of a two-key sequence ("g …")
@@ -113,12 +133,24 @@ export function KeyboardShortcutsProvider({ children }: { children: React.ReactN
   const openHelpModal = useCallback(() => setIsHelpModalOpen(true), []);
   const closeHelpModal = useCallback(() => setIsHelpModalOpen(false), []);
 
+  const openCommandPalette = useCallback(() => setIsCommandPaletteOpen(true), []);
+  const closeCommandPalette = useCallback(() => setIsCommandPaletteOpen(false), []);
+  const toggleCommandPalette = useCallback(() => setIsCommandPaletteOpen((prev) => !prev), []);
+
   const registerComposeHandler = useCallback((handler: () => void) => {
     composeHandlerRef.current = handler;
   }, []);
 
   const unregisterComposeHandler = useCallback(() => {
     composeHandlerRef.current = null;
+  }, []);
+
+  const registerWalletHandler = useCallback((handler: () => void) => {
+    walletHandlerRef.current = handler;
+  }, []);
+
+  const unregisterWalletHandler = useCallback(() => {
+    walletHandlerRef.current = null;
   }, []);
 
   const registerSearchRef = useCallback((ref: React.RefObject<HTMLInputElement | null>) => {
@@ -144,6 +176,18 @@ export function KeyboardShortcutsProvider({ children }: { children: React.ReactN
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent) => {
+      // ⌘K (macOS) / Ctrl+K (Windows/Linux) opens command palette from anywhere,
+      // including when focus is inside an input, textarea, or contenteditable.
+      const isCmdK = (event.metaKey || event.ctrlKey) && (event.key === "k" || event.key === "K");
+
+      if (isCmdK) {
+        event.preventDefault();
+        event.stopPropagation();
+        clearSequence();
+        setIsCommandPaletteOpen((prev) => !prev);
+        return;
+      }
+
       // Never intercept when typing in an editable element
       if (isEditableTarget(event)) {
         clearSequence();
@@ -198,8 +242,9 @@ export function KeyboardShortcutsProvider({ children }: { children: React.ReactN
           break;
 
         case "Escape":
-          // Do NOT preventDefault — let the browser handle native Esc (e.g. closing native dialogs)
+          // Close command palette and help modal if open
           setIsHelpModalOpen(false);
+          setIsCommandPaletteOpen(false);
           break;
 
         case "g":
@@ -234,9 +279,16 @@ export function KeyboardShortcutsProvider({ children }: { children: React.ReactN
     isHelpModalOpen,
     openHelpModal,
     closeHelpModal,
+    isCommandPaletteOpen,
+    openCommandPalette,
+    closeCommandPalette,
+    toggleCommandPalette,
     onOpenCompose: composeHandlerRef.current,
     registerComposeHandler,
     unregisterComposeHandler,
+    onOpenWallet: walletHandlerRef.current,
+    registerWalletHandler,
+    unregisterWalletHandler,
     registerSearchRef,
   };
 
