@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import SearchBar from "../../components/SearchBar";
+import { ExploreGridSkeleton } from "@/components/skeletons";
 
 interface Post {
   id: string;
@@ -64,11 +65,7 @@ export default function ExplorePage() {
         <SearchBar onSearch={handleSearch} />
       </div>
 
-      {loading && (
-        <div className="text-center py-8" aria-live="polite">
-          <div className="text-gray-600">Searching posts...</div>
-        </div>
-      )}
+      {loading && <ExploreGridSkeleton count={4} />}
 
       {error && (
         <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4" role="alert">

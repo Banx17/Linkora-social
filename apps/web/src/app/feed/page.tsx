@@ -17,8 +17,8 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useWallet } from "@/hooks/useWallet";
-import { PostCard, type Post } from "@/components/PostCard";
-import { PostCardSkeleton } from "@/components/PostCard";
+import { PostCard, PostCardSkeleton, type Post } from "@/components/PostCard";
+import { FeedSkeleton } from "@/components/skeletons";
 
 const INDEXER_URL = process.env.NEXT_PUBLIC_INDEXER_URL ?? "http://localhost:3001";
 const PAGE_SIZE = 20;
@@ -237,10 +237,8 @@ export default function FeedPage() {
         )}
 
         {state.loading && state.posts.length === 0 ? (
-          <div data-testid="loading-indicator" className="space-y-4">
-            <PostCardSkeleton />
-            <PostCardSkeleton />
-            <PostCardSkeleton />
+          <div data-testid="loading-indicator">
+            <FeedSkeleton />
           </div>
         ) : state.posts.length === 0 && !state.loading ? (
           <div
