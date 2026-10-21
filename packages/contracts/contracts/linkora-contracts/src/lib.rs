@@ -167,6 +167,26 @@ pub struct Pool {
     pub threshold: u32,
 }
 
+// ── Pool Withdrawal Slippage ──────────────────────────────────────────────────
+//
+// POOL_WITHDRAW_FEE_BPS: fee charged on pool withdrawals, in basis points of the
+// withdrawn amount. Pools are multisig treasuries that move tokens 1:1, so
+// withdrawals carry no price impact and are currently fee-free (the protocol
+// fee only applies to tips): the rate is zero and a withdrawal delivers
+// exactly the requested amount.
+//
+// Slippage formula: received = requested - requested * fee_bps / 10_000.
+//
+// `min_out_amount` is compared against the *received* amount, not the
+// requested one, so the guard keeps its meaning once withdrawal fees exist
+// (tiered pool fee model): the fee is subtracted in exactly one place.
+const POOL_WITHDRAW_FEE_BPS: i128 = 0;
+
+/// Amount actually delivered to the recipient for a withdrawal of `requested`.
+fn pool_withdraw_received_amount(requested: i128) -> i128 {
+    requested - (requested * POOL_WITHDRAW_FEE_BPS / 10_000)
+}
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct ContractState {
@@ -470,6 +490,22 @@ pub struct PoolWithdrawEvent {
     #[topic]
     pub pool_id: Symbol,
     pub amount: i128,
+}
+
+/// Published when a withdrawal would deliver less than the caller's
+/// `min_out_amount`. The withdrawal then reverts, so the event is rolled back
+/// with the failed invocation and is only observable in the failed-call
+/// diagnostics (it never lands in the committed ledger events).
+#[contractevent(topics = ["withdrawal_slippage_exceeded"])]
+#[derive(Clone)]
+pub struct WithdrawalSlippageExceededEvent {
+    #[topic]
+    pub version: u32,
+    #[topic]
+    pub pool_id: Symbol,
+    pub requested_amount: i128,
+    pub received_amount: i128,
+    pub min_out_amount: i128,
 }
 
 #[contractevent]
@@ -2474,18 +2510,33 @@ impl LinkoraContract {
     }
 
     /// Withdraw from a pool. Requires `threshold` valid admin signatures.
+    ///
+    /// `min_out_amount` is the minimum amount the recipient must receive. The
+    /// received amount is `requested - requested * fee_bps / 10_000` (see
+    /// `pool_withdraw_received_amount`); when it is below `min_out_amount` the
+    /// withdrawal reverts with `"slippage exceeded"` and publishes a
+    /// `WithdrawalSlippageExceededEvent`.
+    ///
+    /// `deadline` is a Unix timestamp: once the ledger timestamp is past it the
+    /// withdrawal reverts with `"deadline expired"`.
     pub fn pool_withdraw(
         env: Env,
         signers: Vec<Address>,
         pool_id: Symbol,
         amount: i128,
         recipient: Address,
+        min_out_amount: Option<i128>,
+        deadline: Option<u64>,
     ) {
         Self::bump_instance(&env);
         Self::require_not_paused(&env, PauseModule::Pools);
         validate_address_list(&env, "signers", &signers);
         validate_non_default_address(&env, "recipient", &recipient);
         validate_amount(&env, "withdraw amount", amount);
+        if let Some(deadline) = deadline {
+            assert!(env.ledger().timestamp() <= deadline, "deadline expired");
+        }
+
         let key = StorageKey::Pool(pool_id.clone());
         let mut pool: Pool = env
             .storage()
@@ -2502,6 +2553,21 @@ impl LinkoraContract {
             signer.require_auth();
         }
         assert!(pool.balance >= amount, "low balance");
+
+        let received = pool_withdraw_received_amount(amount);
+        if let Some(min_out) = min_out_amount {
+            if received < min_out {
+                WithdrawalSlippageExceededEvent {
+                    version: EVENT_VERSION,
+                    pool_id: pool_id.clone(),
+                    requested_amount: amount,
+                    received_amount: received,
+                    min_out_amount: min_out,
+                }
+                .publish(&env);
+                panic!("slippage exceeded");
+            }
+        }
 
         pool.balance -= amount;
         env.storage().persistent().set(&key, &pool);

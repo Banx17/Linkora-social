@@ -195,6 +195,28 @@ describe("parseContractEvent", () => {
     expect(evt.amount).toBe(500n);
   });
 
+  it("decodes WithdrawalSlippageExceededEvent", () => {
+    const raw = rawEvent({
+      topics: [enc("withdrawal_slippage_exceeded")],
+      data: enc({
+        pool_id: "rewards",
+        requested_amount: "500",
+        received_amount: "400",
+        min_out_amount: "450",
+      }),
+    });
+    const evt = parseContractEvent(raw) as Extract<
+      LinkoraEvent,
+      { type: "withdrawal_slippage_exceeded" }
+    >;
+    expect(evt).not.toBeNull();
+    expect(evt.type).toBe("withdrawal_slippage_exceeded");
+    expect(evt.pool_id).toBe("rewards");
+    expect(evt.requested_amount).toBe(500n);
+    expect(evt.received_amount).toBe(400n);
+    expect(evt.min_out_amount).toBe(450n);
+  });
+
   it("decodes GovProposalCreatedEvent", () => {
     const raw = rawEvent({
       topics: [enc("gov_proposal_created")],

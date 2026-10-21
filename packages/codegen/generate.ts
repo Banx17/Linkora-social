@@ -61,6 +61,8 @@ interface FuncParam {
   name: string;
   type: string;
   sorobanType?: string;
+  /** Inner Soroban type of an `Option<T>` parameter (e.g. "i128"). */
+  optionInner?: string;
 }
 
 interface FunctionType {
@@ -159,13 +161,28 @@ function parseSpec(): {
       const name = f.name().toString();
       const inputs = f.inputs().map((i: xdr.ScSpecFunctionInputV0) => {
         const rawType = i.type();
+        const sorobanType = rawType
+          .switch()
+          .name.replace(/^scSpecType/, "")
+          .toLowerCase();
+        // `Option<T>` is encoded on the wire as the bare inner value for
+        // `Some` and as `ScVal::Void` for `None`, so the inner type decides
+        // which ScVal constructor is used ("bigint" alone is ambiguous
+        // between i128 and u64).
+        const optionInner =
+          sorobanType === "option"
+            ? rawType
+                .option()
+                .valueType()
+                .switch()
+                .name.replace(/^scSpecType/, "")
+                .toLowerCase()
+            : undefined;
         return {
           name: i.name().toString(),
           type: resolveType(rawType),
-          sorobanType: rawType
-            .switch()
-            .name.replace(/^scSpecType/, "")
-            .toLowerCase(),
+          sorobanType,
+          ...(optionInner ? { optionInner } : {}),
         };
       });
       const outputs = f.outputs().map((o: xdr.ScSpecTypeDef) => ({
@@ -423,7 +440,7 @@ function generateClient(
         `  async ${camelCase(fn.name)}(${generateParams(fn.inputs)}): Promise<${returnType}> {`
       );
       const args = fn.inputs
-        .map((p) => argToScVal(p.name, p.type, knownTypes, p.sorobanType))
+        .map((p) => argToScVal(p.name, p.type, knownTypes, p.sorobanType, p.optionInner))
         .join(", ");
       lines.push(
         `    const retval = await this.simulateCall("${fn.name}"${args ? ", " + args : ""});`
@@ -474,7 +491,7 @@ function generateClient(
       lines.push("   */");
       lines.push(`  ${camelCase(fn.name)}(${generateParams(fn.inputs)}): string {`);
       const args = fn.inputs
-        .map((p) => argToScVal(p.name, p.type, knownTypes, p.sorobanType))
+        .map((p) => argToScVal(p.name, p.type, knownTypes, p.sorobanType, p.optionInner))
         .join(", ");
       lines.push(`    return this.buildTx("${fn.name}"${args ? ", " + args : ""});`);
       lines.push("  }");
@@ -666,7 +683,8 @@ function argToScVal(
   name: string,
   type: string,
   knownTypes: Set<string>,
-  sorobanType?: string
+  sorobanType?: string,
+  optionInner?: string
 ): string {
   if (!sorobanType) {
     // Fallback: try to infer from TS type
@@ -706,9 +724,41 @@ function argToScVal(
       return `nativeToScVal(${name}, { type: "vec" })`;
     }
     case "option":
-      return `nativeToScVal(${name})`;
+      // `Option<T>` is `ScVal::Void` for `None` and the bare inner value for
+      // `Some`, so the inner Soroban type picks the ScVal constructor.
+      return `${name} === null ? nativeToScVal(null) : ${optionInnerToScVal(optionInner, name)}`;
     default:
       // UDT (custom struct/enum)
+      return `nativeToScVal(${name})`;
+  }
+}
+
+/**
+ * ScVal constructor for the inner type of an `Option<T>` parameter.
+ */
+function optionInnerToScVal(inner: string | undefined, name: string): string {
+  switch (inner) {
+    case "address":
+      return `scvAddress(${name})`;
+    case "symbol":
+      return `scvSymbol(${name})`;
+    case "string":
+      return `scvString(${name})`;
+    case "u32":
+    case "i32":
+      return `scvU32(${name})`;
+    case "u64":
+    case "i64":
+      return `scvU64(${name})`;
+    case "i128":
+      return `scvI128(${name})`;
+    case "u128":
+      return `nativeToScVal(${name}, { type: "u128" })`;
+    case "bool":
+      return `nativeToScVal(${name})`;
+    case "vec":
+      return `nativeToScVal(${name}, { type: "vec" })`;
+    default:
       return `nativeToScVal(${name})`;
   }
 }

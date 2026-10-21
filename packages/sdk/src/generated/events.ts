@@ -165,6 +165,18 @@ export interface PoolWithdrawEvent {
 }
 
 /**
+ * Contract event: `WithdrawalSlippageExceededEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
+export interface WithdrawalSlippageExceededEvent {
+  pool_id: string;
+  requested_amount: bigint;
+  received_amount: bigint;
+  min_out_amount: bigint;
+}
+
+/**
  * Contract event: `DmKeyPublishedEvent`.
  * Emitted by the Linkora contract — see
  * packages/contracts/contracts/linkora-contracts/src/lib.rs.
@@ -320,6 +332,7 @@ export type RawLinkoraEvent =
   | ({ type: "PoolDepositEvent" } & PoolDepositEvent)
   | ({ type: "PostCreatedEvent" } & PostCreatedEvent)
   | ({ type: "PoolWithdrawEvent" } & PoolWithdrawEvent)
+  | ({ type: "WithdrawalSlippageExceededEvent" } & WithdrawalSlippageExceededEvent)
   | ({ type: "DmKeyPublishedEvent" } & DmKeyPublishedEvent)
   | ({ type: "PoolAdminAddedEvent" } & PoolAdminAddedEvent)
   | ({ type: "ProposalSignedEvent" } & ProposalSignedEvent)
@@ -441,6 +454,14 @@ export function parseRawContractEvent(event: rpc.Api.EventResponse): RawLinkoraE
         type: "PostCreatedEvent",
         id: scValToNative(event.topic[1]),
         author: scValToNative(event.topic[2]),
+      };
+    case "WithdrawalSlippageExceededEvent":
+      return {
+        type: "WithdrawalSlippageExceededEvent",
+        pool_id: scValToNative(event.topic[1]),
+        requested_amount: scValToNative(event.topic[2]),
+        received_amount: scValToNative(event.topic[3]),
+        min_out_amount: scValToNative(event.topic[4]),
       };
     case "PoolWithdrawEvent":
       return {
