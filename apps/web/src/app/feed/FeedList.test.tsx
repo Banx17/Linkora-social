@@ -10,6 +10,7 @@ import React from "react";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 
 import { FeedList } from "./FeedList";
+import { QueryProvider } from "@/contexts/QueryProvider";
 import { FEED_PAGE_SIZE, WALLET_REQUIRED_MESSAGE } from "@/services/feed";
 
 const mockFetch = jest.fn();
@@ -83,7 +84,9 @@ async function triggerSentinel() {
 
 describe("FeedList initial page", () => {
   it("renders the streamed page without requesting it again", async () => {
-    render(<FeedList tab="for-you" address={null} initial={initialSnapshot(makeFirstPage())} />);
+    renderFeed(
+      <FeedList tab="for-you" address={null} initial={initialSnapshot(makeFirstPage())} />
+    );
 
     expect(screen.getByText("Infinite post 1")).toBeInTheDocument();
     expect(screen.getByTestId("post-list")).toBeInTheDocument();
@@ -97,7 +100,7 @@ describe("FeedList initial page", () => {
   });
 
   it("shows the streamed error when the tab needs a wallet", () => {
-    render(
+    renderFeed(
       <FeedList
         tab="following"
         address={null}
@@ -115,13 +118,15 @@ describe("FeedList initial page", () => {
   });
 
   it("shows an empty state when the first page has no posts", () => {
-    render(<FeedList tab="for-you" address={null} initial={initialSnapshot([])} />);
+    renderFeed(<FeedList tab="for-you" address={null} initial={initialSnapshot([])} />);
 
     expect(screen.getByTestId("empty-feed")).toHaveTextContent("No posts yet");
   });
 
   it("does not announce the initial page", () => {
-    render(<FeedList tab="for-you" address={null} initial={initialSnapshot(makeFirstPage())} />);
+    renderFeed(
+      <FeedList tab="for-you" address={null} initial={initialSnapshot(makeFirstPage())} />
+    );
 
     const announcer = screen.getByTestId("feed-announcer");
     expect(announcer).toHaveAttribute("aria-live", "polite");
@@ -154,7 +159,7 @@ describe("FeedList pagination", () => {
     const secondPage = [makePost("p20", "Infinite post 20"), makePost("p21", "Infinite post 21")];
     setupPaginatedFetchMock(secondPage);
 
-    render(
+    renderFeed(
       <FeedList
         tab="for-you"
         address={null}
@@ -183,7 +188,7 @@ describe("FeedList pagination", () => {
       return { ok: false, json: async () => ({}) };
     });
 
-    render(
+    renderFeed(
       <FeedList
         tab="for-you"
         address={null}
@@ -209,7 +214,7 @@ describe("FeedList pagination", () => {
       makePost("p22", "Infinite post 22"),
     ]);
 
-    render(
+    renderFeed(
       <FeedList
         tab="for-you"
         address={null}
@@ -245,7 +250,7 @@ describe("FeedList slow network and failures", () => {
       return { ok: false, json: async () => ({}) };
     });
 
-    render(
+    renderFeed(
       <FeedList
         tab="for-you"
         address={null}
@@ -266,7 +271,7 @@ describe("FeedList slow network and failures", () => {
 
     mockFetch.mockImplementation(async () => ({ ok: false, json: async () => ({}) }));
 
-    render(
+    renderFeed(
       <FeedList
         tab="for-you"
         address={null}
@@ -290,3 +295,13 @@ describe("FeedList slow network and failures", () => {
     expect(screen.getByTestId("infinite-scroll-retry")).toBeInTheDocument();
   });
 });
+
+/**
+ * FeedList now renders optimistic post actions backed by TanStack Query, so it
+ * needs the provider the app mounts in `app/layout.tsx`.
+ */
+function renderFeed(ui: React.ReactElement) {
+  return render(ui, {
+    wrapper: ({ children }) => <QueryProvider>{children}</QueryProvider>,
+  });
+}

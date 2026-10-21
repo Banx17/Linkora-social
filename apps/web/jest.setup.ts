@@ -44,6 +44,12 @@ Object.defineProperty(window, "Notification", {
   },
 });
 
+// @vercel/analytics ships ESM-only builds that Jest cannot parse without a
+// transform; the component performs no work needed by unit tests.
+jest.mock("@vercel/analytics/react", () => ({
+  Analytics: () => null,
+}));
+
 // Mock next/navigation
 jest.mock("next/navigation", () => ({
   useRouter: () => ({

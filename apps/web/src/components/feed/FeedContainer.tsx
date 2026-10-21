@@ -1,10 +1,11 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { usePosts } from "@/hooks/usePosts";
+import { usePosts, type OptimisticPost } from "@/hooks/usePosts";
+import { useLikeMutation } from "@/hooks/useLikeMutation";
 import { CreatePostModal } from "../modals/CreatePostModal";
 import { PostCard, PostCardSkeleton } from "../PostCard";
-import { Plus } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import { useFeatureFlag } from "@/lib/featureFlags";
 
 /** Number of posts to show per page when infinite scroll is enabled. */
@@ -17,7 +18,15 @@ export interface FeedContainerProps {
 export function FeedContainer({ authorAddress }: FeedContainerProps) {
   const infiniteScrollEnabled = useFeatureFlag("infinite-scroll");
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const { posts, loading, error, addPostOptimistic } = usePosts();
+  const {
+    posts,
+    loading,
+    error,
+    postError,
+    clearPostError,
+    addPostOptimistic,
+    deletePostOptimistic,
+  } = usePosts();
 
   // ── Infinite scroll state ────────────────────────────────────────────────
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
@@ -134,7 +143,7 @@ export function FeedContainer({ authorAddress }: FeedContainerProps) {
               }`}
               aria-hidden={post.isDeleting}
             >
-              <PostCard post={post} />
+              <FeedPost post={post} authorAddress={authorAddress} onDelete={deletePostOptimistic} />
               {post.isPending && !post.isDeleting && (
                 <div className="flex items-center gap-1.5 mt-1 justify-end">
                   {/* Spinner */}
@@ -142,16 +151,11 @@ export function FeedContainer({ authorAddress }: FeedContainerProps) {
                     className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-violet-400 border-t-transparent"
                     aria-hidden="true"
                   />
-                  <span className="text-[10px] text-violet-400 font-medium">
-                    Posting…
-                  </span>
+                  <span className="text-[10px] text-violet-400 font-medium">Posting…</span>
                 </div>
               )}
               {post.error && (
-                <p
-                  role="alert"
-                  className="mt-1 text-right text-[10px] text-red-400"
-                >
+                <p role="alert" className="mt-1 text-right text-[10px] text-red-400">
                   {post.error}
                 </p>
               )}
@@ -182,3 +186,44 @@ export function FeedContainer({ authorAddress }: FeedContainerProps) {
   );
 }
 
+interface FeedPostProps {
+  post: OptimisticPost;
+  authorAddress?: string;
+  /** Optimistic delete; restores the post and raises a toast on failure. */
+  onDelete: (postId: string | number) => Promise<unknown>;
+}
+
+/**
+ * One feed row.
+ *
+ * The like button is backed by `useLikeMutation`, so the heart and counter
+ * flip synchronously and roll back (with a toast) if the transaction fails.
+ * The delete affordance is author-only and removes the post optimistically.
+ */
+function FeedPost({ post, authorAddress, onDelete }: FeedPostProps) {
+  const like = useLikeMutation({
+    postId: post.id,
+    initialLikeCount: Number(post.like_count ?? 0),
+  });
+
+  const canDelete = Boolean(authorAddress) && post.author === authorAddress && !post.isOptimistic;
+
+  const handleDelete = useCallback(() => {
+    if (!canDelete) return;
+    // Rollback and the error toast are handled inside the mutation hook.
+    void onDelete(post.id).catch(() => undefined);
+  }, [canDelete, onDelete, post.id]);
+
+  return (
+    <PostCard
+      post={{ ...post, like_count: like.likeCount }}
+      isLiked={like.liked}
+      onLike={() => {
+        void like.like();
+      }}
+      onDelete={canDelete ? handleDelete : undefined}
+      isDeleting={post.isDeleting}
+      disabled={post.isDeleting}
+    />
+  );
+}

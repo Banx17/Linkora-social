@@ -2,6 +2,7 @@ import React from "react";
 import { render } from "@testing-library/react";
 import { axe, toHaveNoViolations } from "jest-axe";
 import ProfilePage from "../src/app/profile/[address]/page";
+import { QueryProvider } from "../src/contexts/QueryProvider";
 
 expect.extend(toHaveNoViolations);
 
@@ -111,7 +112,7 @@ jest.mock("../../../packages/sdk/src/client", () => ({
 
 describe("ProfilePage Accessibility", () => {
   it("should have no critical or serious accessibility violations", async () => {
-    const { container } = render(<ProfilePage />);
+    const { container } = renderPage();
 
     const results = await axe(container, {
       rules: {
@@ -129,13 +130,13 @@ describe("ProfilePage Accessibility", () => {
   });
 
   it("Follow button has an appropriate aria-label", () => {
-    const { getByRole } = render(<ProfilePage />);
+    const { getByRole } = renderPage();
     const followBtn = getByRole("button", { name: /follow testuser/i });
     expect(followBtn).toBeTruthy();
   });
 
   it("Follow button is inside an aria-live region", () => {
-    const { container } = render(<ProfilePage />);
+    const { container } = renderPage();
     const liveRegion = container.querySelector('[aria-live="polite"]');
     expect(liveRegion).toBeTruthy();
     // The follow button should be a descendant
@@ -144,13 +145,13 @@ describe("ProfilePage Accessibility", () => {
   });
 
   it("profile header section has an accessible label", () => {
-    const { container } = render(<ProfilePage />);
+    const { container } = renderPage();
     const section = container.querySelector('[aria-label="Profile header"]');
     expect(section).toBeTruthy();
   });
 
   it("shows a verification badge whose provenance is exposed to assistive tech", () => {
-    const { getByTestId } = render(<ProfilePage />);
+    const { getByTestId } = renderPage();
     const badge = getByTestId("verification-badge");
     expect(badge).toBeTruthy();
 
@@ -162,3 +163,13 @@ describe("ProfilePage Accessibility", () => {
     expect(icon).toHaveAttribute("title", "Identity verified via Stellar attestation");
   });
 });
+
+/**
+ * The page now owns optimistic mutations (TanStack Query), so it must be
+ * rendered inside the same provider the app mounts in `app/layout.tsx`.
+ */
+function renderPage() {
+  return render(<ProfilePage />, {
+    wrapper: ({ children }) => <QueryProvider>{children}</QueryProvider>,
+  });
+}

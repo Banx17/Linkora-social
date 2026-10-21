@@ -54,13 +54,15 @@ describe("app/layout.tsx provider tree", () => {
   it("mounts ThemeProvider so ThemeToggle works without a manual wrapper", async () => {
     renderAppProviders(<ThemeToggle />);
 
-    const toggle = screen.getByRole("button");
+    // The app tree contains many buttons (search, navigation); scope the query
+    // to the theme toggle's accessible name.
+    const toggle = screen.getByRole("button", { name: /switch to .* mode/i });
     expect(toggle).toHaveTextContent("Light");
 
     fireEvent.click(toggle);
 
     await waitFor(() => {
-      expect(screen.getByRole("button")).toHaveTextContent("Dark");
+      expect(screen.getByRole("button", { name: /switch to .* mode/i })).toHaveTextContent("Dark");
     });
     expect(document.documentElement.dataset.theme).toBe("dark");
   });

@@ -24,8 +24,12 @@ interface PostCardProps {
   query?: string;
   onLike?: () => void;
   onTip?: () => void;
+  /** Renders a delete affordance when provided (author-only). */
+  onDelete?: () => void;
   isLiked?: boolean;
   isTipping?: boolean;
+  /** True while an optimistic delete is in flight. */
+  isDeleting?: boolean;
   tourAnchor?: boolean;
   disabled?: boolean;
   "data-testid"?: string;
@@ -91,8 +95,10 @@ export function PostCard({
   query,
   onLike,
   onTip,
+  onDelete,
   isLiked,
   isTipping,
+  isDeleting = false,
   tourAnchor,
   disabled = false,
   "data-testid": dataTestId,
@@ -176,6 +182,20 @@ export function PostCard({
           <span className="text-lg">💰</span>
           <span>Tips: {getPostTipTotal(post)}</span>
         </button>
+
+        {onDelete && (
+          <button
+            onClick={onDelete}
+            disabled={disabled || isDeleting}
+            className="ml-auto flex items-center gap-1.5 text-sm font-medium text-[var(--text-muted)] transition-colors hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-50"
+            aria-label={isDeleting ? "Deleting post" : "Delete post"}
+          >
+            <span className="text-base" aria-hidden="true">
+              {isDeleting ? "…" : "🗑"}
+            </span>
+            <span>{isDeleting ? "Deleting…" : "Delete"}</span>
+          </button>
+        )}
       </div>
     </article>
   );
