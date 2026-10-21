@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useNotifications, Notification } from "@/hooks/useNotifications";
 import { useWalletContext } from "@/components/WalletProvider";
+import { NotificationItemSkeleton } from "@/components/skeletons";
 
 function truncateAddress(addr: string): string {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
@@ -197,10 +198,7 @@ export default function NotificationsPage() {
       {initialLoading ? (
         <ul className="flex flex-col gap-3" aria-busy="true" aria-label="Loading notifications">
           {[0, 1, 2].map((i) => (
-            <li
-              key={i}
-              className="h-16 animate-pulse rounded-xl border border-[var(--border)] bg-[var(--muted)]/40"
-            />
+            <NotificationItemSkeleton key={i} />
           ))}
         </ul>
       ) : initialError ? (

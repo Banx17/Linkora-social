@@ -102,6 +102,44 @@
   --radius-lg:   0.75rem;
   --radius-xl:   1rem;
   --radius-full: 9999px;
+
+  /* ── Skeleton shimmer ──
+   * Drives every skeleton loader. The animation token is a custom property
+   * so consumers can neutralise motion by overriding a single variable —
+   * see the prefers-reduced-motion block below.
+   */
+  --skeleton-gradient: linear-gradient(
+    90deg,
+    var(--color-surface-1) 0%,
+    var(--color-surface-2) 50%,
+    var(--color-surface-1) 100%
+  );
+  --skeleton-background-size: 200% 100%;
+  --skeleton-shimmer-duration: 1.5s;
+  --skeleton-shimmer-easing: linear;
+  --skeleton-shimmer-animation: shimmer
+    var(--skeleton-shimmer-duration)
+    var(--skeleton-shimmer-easing)
+    infinite;
+}
+
+/* Shimmer travel: gradient sweeps across the placeholder. */
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* Respect reduced-motion preferences: the shimmer pauses (no animation),
+ * leaving a static placeholder — layout is unaffected.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --skeleton-shimmer-animation: none;
+  }
 }
 
 /* ── Dark mode overrides ── */

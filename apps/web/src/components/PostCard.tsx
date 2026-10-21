@@ -217,34 +217,4 @@ export function PostCard({
   );
 }
 
-function useReducedMotion(): boolean {
-  const [prefersReduced, setPrefersReduced] = useState(false);
-  useEffect(() => {
-    const mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
-    setPrefersReduced(mediaQuery.matches);
-    const handler = (e: MediaQueryListEvent) => setPrefersReduced(e.matches);
-    mediaQuery.addEventListener("change", handler);
-    return () => mediaQuery.removeEventListener("change", handler);
-  }, []);
-  return prefersReduced;
-}
-
-export function PostCardSkeleton() {
-  return (
-    <div className="animate-pulse rounded-xl border border-[var(--border)] bg-[var(--muted)] p-3 md:p-4 lg:p-5 space-y-4">
-      <div className="flex justify-between">
-        <div className="h-4 w-28 rounded bg-zinc-800" />
-        <div className="h-4 w-20 rounded bg-zinc-800" />
-      </div>
-      <div className="space-y-3">
-        <div className="h-4 w-full rounded bg-zinc-800" />
-        <div className="h-4 w-4/5 rounded bg-zinc-800" />
-        <div className="h-4 w-2/3 rounded bg-zinc-800" />
-      </div>
-      <div className="border-t border-[var(--border)]/40 pt-3 flex gap-6">
-        <div className="h-5 w-12 rounded bg-zinc-800" />
-        <div className="h-5 w-20 rounded bg-zinc-800" />
-      </div>
-    </div>
-  );
-}
+export { PostCardSkeleton } from "@/components/skeletons";
