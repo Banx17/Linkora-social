@@ -7,6 +7,7 @@ import {
   getPostTipTotal,
   type Post,
 } from "@/components/PostCard";
+import { ResponsiveImage } from "@/components/ui/ResponsiveImage";
 
 interface MasonryCardProps {
   post: Post;
@@ -14,7 +15,12 @@ interface MasonryCardProps {
   onTip?: () => void;
   isLiked?: boolean;
   isTipping?: boolean;
+  /** Above the fold (one of the first cards): preload the image. */
+  priority?: boolean;
 }
+
+// MasonryGrid renders 2 columns on mobile (the only place it is shown).
+const MASONRY_IMAGE_SIZES = "50vw";
 
 // Deterministic (not Math.random) so server and client render the same aspect
 // ratio for a given post — avoids hydration mismatch and layout shift.
@@ -45,7 +51,14 @@ function splitTitleAndBody(content: string): { title: string; body: string } {
   return { title: `${firstLine.slice(0, 60)}…`, body: content };
 }
 
-export function MasonryCard({ post, onLike, onTip, isLiked, isTipping }: MasonryCardProps) {
+export function MasonryCard({
+  post,
+  onLike,
+  onTip,
+  isLiked,
+  isTipping,
+  priority = false,
+}: MasonryCardProps) {
   const displayName = post.username || formatAuthor(post.author);
   const date = getPostDate(post);
   const likeCount = getPostLikeCount(post);
@@ -59,8 +72,17 @@ export function MasonryCard({ post, onLike, onTip, isLiked, isTipping }: Masonry
   return (
     <article className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--color-bg)] shadow-md transition-shadow hover:shadow-lg">
       {post.imageUrl ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={post.imageUrl} alt="" className="w-full h-auto" loading="lazy" />
+        <div className="relative w-full" style={{ aspectRatio }}>
+          <ResponsiveImage
+            src={post.imageUrl}
+            alt=""
+            fill
+            sizes={MASONRY_IMAGE_SIZES}
+            priority={priority}
+            deferOnSaveData
+            className="object-cover"
+          />
+        </div>
       ) : (
         <div
           className="w-full flex items-center justify-center text-white/70 text-3xl font-bold"

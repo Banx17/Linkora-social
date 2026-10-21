@@ -11,6 +11,10 @@ import {
 } from "@/components/PostCard";
 import { Profile, ProfileCard } from "@/components/ProfileCard";
 import SearchBar from "@/components/SearchBar";
+import { isAboveTheFold } from "@/lib/responsiveImage";
+
+// Results sit in the max-w-5xl (1024px) container minus page padding.
+const SEARCH_POST_IMAGE_SIZES = "(min-width: 1024px) 992px, 100vw";
 
 type Tab = "posts" | "profiles";
 type Sort = "relevance" | "recent" | "most_tipped";
@@ -252,7 +256,15 @@ export function SearchPageClient() {
           {!loading &&
             !error &&
             hasPostResults &&
-            visiblePosts.map((post) => <PostCard key={post.id} post={post} query={query} />)}
+            visiblePosts.map((post, index) => (
+              <PostCard
+                key={post.id}
+                post={post}
+                query={query}
+                priority={isAboveTheFold(index)}
+                imageSizes={SEARCH_POST_IMAGE_SIZES}
+              />
+            ))}
           {!loading && !error && !hasPostResults && (
             <div className="rounded-lg border border-[var(--border)] bg-[var(--muted)] p-8 text-center text-[var(--text-muted)]">
               No posts found for &quot;{query}&quot;.
