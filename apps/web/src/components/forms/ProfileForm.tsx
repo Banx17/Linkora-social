@@ -1,168 +1,149 @@
-'use client';
+"use client";
 
-import { useEffect, useState } from 'react';
-import { validateUsername, validateStellarAddress } from '@/lib/validate';
-import { FieldError } from './FieldError';
+/**
+ * ProfileForm — React 19 progressive-enhancement edition.
+ *
+ * Key design decisions
+ * ────────────────────
+ * • `useActionState` manages the full form lifecycle (idle → pending → success/error).
+ *   No manual `useState` for individual fields — values live natively in the DOM
+ *   and are read by the Server Action via `FormData`.
+ *
+ * • `useFormStatus` (inside `<SubmitButton>`) drives the submit button's
+ *   pending state without any prop drilling.
+ *
+ * • Inline field errors come from `state.fieldErrors` populated by the
+ *   Zod-validated Server Action, displayed via the existing `<FieldError>` component.
+ *
+ * • The form degrades gracefully without JavaScript: the `action` prop on
+ *   `<form>` points directly to the Server Action so submission still works
+ *   in environments where JS is unavailable.
+ *
+ * • `address` is passed as a hidden input so the Server Action stays
+ *   wallet-agnostic (no direct Freighter access on the server).
+ */
 
-export interface ProfileFormValues {
-  username: string;
-  creatorToken: string;
-}
+import { useActionState } from "react";
+import { FieldError } from "./FieldError";
+import { SubmitButton } from "./SubmitButton";
+import {
+  updateProfileAction,
+  initialProfileActionState,
+  type ProfileActionState,
+} from "@/app/actions/profile";
+import type { ProfileFormValues } from "@/lib/schemas/profile";
 
-interface ProfileFormProps {
-  /** Called with validated values on successful submission. */
-  onSubmit: (values: ProfileFormValues) => void | Promise<void>;
+// ─── Props ────────────────────────────────────────────────────────────────────
+
+export interface ProfileFormProps {
+  /** Wallet address passed as a hidden field to the Server Action. */
+  address: string;
+  /** Pre-populate inputs with existing profile data. */
   initialValues?: Partial<ProfileFormValues>;
-  disabled?: boolean;
 }
 
-interface FormErrors {
-  username?: string;
-  creatorToken?: string;
-}
+// Re-export so callers that used to import ProfileFormValues from here still work
+export type { ProfileFormValues };
 
-export function ProfileForm({ onSubmit, initialValues = {}, disabled = false }: ProfileFormProps) {
-  const [username, setUsername] = useState(initialValues.username ?? '');
-  const [creatorToken, setCreatorToken] = useState(initialValues.creatorToken ?? '');
-  const [errors, setErrors] = useState<FormErrors>({});
-  const [usernameFeedback, setUsernameFeedback] = useState<FormErrors['username']>();
-  const [usernameValid, setUsernameValid] = useState(false);
-  const [usernameTouched, setUsernameTouched] = useState(Boolean(initialValues.username));
-  const [submitting, setSubmitting] = useState(false);
+// ─── Component ───────────────────────────────────────────────────────────────
 
-  useEffect(() => {
-    setUsername(initialValues.username ?? '');
-    setCreatorToken(initialValues.creatorToken ?? '');
-    setUsernameTouched(Boolean(initialValues.username));
-  }, [initialValues.creatorToken, initialValues.username]);
+export function ProfileForm({ address, initialValues = {} }: ProfileFormProps) {
+  const [state, formAction] = useActionState<ProfileActionState, FormData>(
+    updateProfileAction,
+    initialProfileActionState
+  );
 
-  useEffect(() => {
-    setUsernameValid(false);
-    const timer = window.setTimeout(() => {
-      if (!usernameTouched && !username.trim()) {
-        setUsernameFeedback(undefined);
-        return;
-      }
-
-      const result = validateUsername(username);
-      setUsernameFeedback(result.valid ? undefined : result.error);
-      setUsernameValid(result.valid);
-    }, 300);
-
-    return () => window.clearTimeout(timer);
-  }, [username, usernameTouched]);
-
-  function validate(): FormErrors {
-    const errs: FormErrors = {};
-    const usernameResult = validateUsername(username);
-    if (!usernameResult.valid) errs.username = usernameResult.error;
-    // creatorToken is optional — only validate if provided
-    if (creatorToken.trim()) {
-      const addrResult = validateStellarAddress(creatorToken);
-      if (!addrResult.valid) errs.creatorToken = addrResult.error;
-    }
-    return errs;
-  }
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const errs = validate();
-    if (Object.keys(errs).length > 0) {
-      setErrors(errs);
-      setUsernameFeedback(errs.username);
-      setUsernameValid(false);
-      return;
-    }
-    setSubmitting(true);
-    try {
-      await onSubmit({ username: username.trim(), creatorToken: creatorToken.trim() });
-    } finally {
-      setSubmitting(false);
-    }
-  }
+  const { fieldErrors } = state;
 
   return (
-    <form onSubmit={handleSubmit} noValidate aria-label="Edit profile" className="flex flex-col gap-4">
-      {/* Username */}
+    <form
+      action={formAction}
+      aria-label="Edit profile"
+      className="flex flex-col gap-4"
+      noValidate
+    >
+      {/* Hidden wallet address — read by the Server Action */}
+      <input type="hidden" name="address" value={address} />
+
+      {/* ── Top-level status banner ───────────────────────────────────────── */}
+      {state.status === "success" && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-700"
+        >
+          {state.message}
+        </div>
+      )}
+      {state.status === "error" && !state.fieldErrors && (
+        <div
+          role="alert"
+          aria-live="assertive"
+          className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700"
+        >
+          {state.message}
+        </div>
+      )}
+
+      {/* ── Username ─────────────────────────────────────────────────────── */}
       <div>
         <label htmlFor="profile-username" className="block text-sm font-medium mb-1">
-          Username <span aria-hidden="true" className="text-red-500">*</span>
+          Username{" "}
+          <span aria-hidden="true" className="text-red-500">
+            *
+          </span>
         </label>
         <input
           id="profile-username"
           name="username"
           type="text"
-          value={username}
-          onChange={(e) => {
-            setUsername(e.target.value);
-            setUsernameTouched(true);
-            if (errors.username) setErrors((prev) => ({ ...prev, username: undefined }));
-          }}
-          disabled={disabled || submitting}
+          defaultValue={initialValues.username ?? ""}
+          required
           aria-required="true"
-          aria-describedby={
-            errors.username || usernameFeedback
-              ? 'profile-username-error'
-              : usernameValid
-                ? 'profile-username-valid'
-                : undefined
-          }
-          aria-invalid={!!(errors.username || usernameFeedback)}
+          aria-describedby={fieldErrors?.username ? "profile-username-error" : undefined}
+          aria-invalid={!!fieldErrors?.username}
           placeholder="e.g. alice_stellar"
           className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50 ${
-            errors.username || usernameFeedback
-              ? 'border-red-500'
-              : usernameValid
-                ? 'border-green-500'
-                : 'border-gray-300'
+            fieldErrors?.username ? "border-red-500" : "border-gray-300"
           }`}
         />
-        <FieldError id="profile-username-error" message={errors.username || usernameFeedback} />
-        {!errors.username && !usernameFeedback && usernameValid && (
-          <p id="profile-username-valid" aria-live="polite" className="mt-1 text-sm text-green-600">
-            <span aria-hidden="true">✓</span> Username is valid.
-          </p>
-        )}
+        <FieldError id="profile-username-error" message={fieldErrors?.username} />
       </div>
 
-      {/* Creator token (Stellar address) */}
+      {/* ── Creator Token ────────────────────────────────────────────────── */}
       <div>
         <label htmlFor="profile-creator-token" className="block text-sm font-medium mb-1">
-          Creator Token Address{' '}
-          <span className="text-xs text-gray-500 font-normal">(optional — your SEP-41 token)</span>
+          Creator Token Address{" "}
+          <span className="text-xs text-gray-500 font-normal">
+            (optional — your SEP-41 token)
+          </span>
         </label>
         <input
           id="profile-creator-token"
           name="creatorToken"
           type="text"
-          value={creatorToken}
-          onChange={(e) => {
-            setCreatorToken(e.target.value);
-            if (errors.creatorToken) setErrors((prev) => ({ ...prev, creatorToken: undefined }));
-          }}
-          disabled={disabled || submitting}
-          aria-describedby={errors.creatorToken ? 'profile-creator-token-error' : 'profile-creator-token-hint'}
-          aria-invalid={!!errors.creatorToken}
+          defaultValue={initialValues.creatorToken ?? ""}
+          aria-describedby={
+            fieldErrors?.creatorToken
+              ? "profile-creator-token-error"
+              : "profile-creator-token-hint"
+          }
+          aria-invalid={!!fieldErrors?.creatorToken}
           placeholder="GABC…XYZ"
           className={`w-full rounded-lg border px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50 ${
-            errors.creatorToken ? 'border-red-500' : 'border-gray-300'
+            fieldErrors?.creatorToken ? "border-red-500" : "border-gray-300"
           }`}
         />
-        {!errors.creatorToken && (
+        {!fieldErrors?.creatorToken && (
           <p id="profile-creator-token-hint" className="mt-1 text-xs text-gray-500">
             Starts with G or C, 56 characters. Leave blank to use your wallet address.
           </p>
         )}
-        <FieldError id="profile-creator-token-error" message={errors.creatorToken} />
+        <FieldError id="profile-creator-token-error" message={fieldErrors?.creatorToken} />
       </div>
 
-      <button
-        type="submit"
-        disabled={disabled || submitting}
-        className="px-4 py-2 bg-violet-600 text-white text-sm font-medium rounded-lg hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        {submitting ? 'Saving…' : 'Save Profile'}
-      </button>
+      {/* ── Submit ───────────────────────────────────────────────────────── */}
+      <SubmitButton pendingLabel="Saving…">Save Profile</SubmitButton>
     </form>
   );
 }
