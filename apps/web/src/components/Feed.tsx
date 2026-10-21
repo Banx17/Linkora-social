@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { PostCard, Post } from "./PostCard";
+import { isAboveTheFold } from "@/lib/responsiveImage";
 import { fetchIsPaused } from "../lib/api";
 import { OptimisticStore } from "../lib/optimisticStore";
 
@@ -121,7 +122,12 @@ export function Feed({ posts, loading, onLike, onTip, likedPosts = new Set() }: 
 
   return (
     <div style={styles.container}>
-      <div aria-live="polite" aria-atomic="true" role="status" style={{ position: "absolute", left: "-10000px" }}>
+      <div
+        aria-live="polite"
+        aria-atomic="true"
+        role="status"
+        style={{ position: "absolute", left: "-10000px" }}
+      >
         {announcement}
       </div>
       {paused && (
@@ -129,9 +135,9 @@ export function Feed({ posts, loading, onLike, onTip, likedPosts = new Set() }: 
           Linkora is temporarily paused. Writes are disabled until the protocol resumes.
         </div>
       )}
-      {posts.map((post) => (
+      {posts.map((post, index) => (
         <div key={post.id} style={styles.postWrap}>
-          <PostCard post={post} />
+          <PostCard post={post} priority={isAboveTheFold(index)} />
           {(onLike || onTip) && (
             <div style={styles.actions}>
               {onLike && (

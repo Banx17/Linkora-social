@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { VerificationBadge, type VerificationLevel } from "@/components/VerificationBadge";
+import { ResponsiveImage } from "@/components/ui/ResponsiveImage";
 
 export interface Post {
   id: string | number;
@@ -29,8 +30,15 @@ interface PostCardProps {
   isTipping?: boolean;
   tourAnchor?: boolean;
   disabled?: boolean;
+  /** Above the fold (e.g. one of the first feed posts): preload the post image. */
+  priority?: boolean;
+  /** `sizes` for the post image; defaults to the max-w-2xl feed column. */
+  imageSizes?: string;
   "data-testid"?: string;
 }
+
+// The feed column is max-w-2xl (672px) minus page padding.
+export const FEED_POST_IMAGE_SIZES = "(min-width: 672px) 640px, 100vw";
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -96,6 +104,8 @@ export function PostCard({
   isTipping,
   tourAnchor,
   disabled = false,
+  priority = false,
+  imageSizes = FEED_POST_IMAGE_SIZES,
   "data-testid": dataTestId,
 }: PostCardProps) {
   const likeCount = getPostLikeCount(post);
@@ -154,6 +164,20 @@ export function PostCard({
       >
         {highlightText(post.content, query)}
       </motion.p>
+
+      {post.imageUrl && (
+        <div className="relative mb-4 aspect-video overflow-hidden rounded-lg bg-zinc-800">
+          <ResponsiveImage
+            src={post.imageUrl}
+            alt=""
+            fill
+            sizes={imageSizes}
+            priority={priority}
+            deferOnSaveData
+            className="object-cover"
+          />
+        </div>
+      )}
 
       <div
         className="flex items-center gap-6 border-t border-[var(--border)]/40 pt-3"

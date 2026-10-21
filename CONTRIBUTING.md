@@ -385,9 +385,9 @@ Never add a bare `<script src="…">` tag. Use the component in
 `apps/web/src/components/ThirdPartyScripts.tsx`, which pins every script to the lowest
 priority it can get away with:
 
-| Priority            | Use it for                                              | Why                                                       |
-| ------------------- | ------------------------------------------------------- | --------------------------------------------------------- |
-| `beforeInteractive` | Wallet SDK — the app is unusable until it exists        | Hoisted into `<head>`, fetched before hydration           |
+| Priority            | Use it for                                              | Why                                                        |
+| ------------------- | ------------------------------------------------------- | ---------------------------------------------------------- |
+| `beforeInteractive` | Wallet SDK — the app is unusable until it exists        | Hoisted into `<head>`, fetched before hydration            |
 | `afterInteractive`  | Analytics, chat widgets                                 | Loaded once the page is usable; never blocks first paint   |
 | `lazyOnload`        | IPFS pinning, web-vitals beacons, "nice to have" embeds | Idle-time only; never competes with app code for bandwidth |
 
@@ -425,6 +425,38 @@ every hint less effective.
 3. Gate it behind a `NEXT_PUBLIC_*` env var and document the variable.
 4. Add the origin to the preconnect list if it is on the critical path.
 5. Note the change in the pull request so reviewers can weigh the performance cost.
+
+---
+
+## Images and input responsiveness (web)
+
+### Render images through `ResponsiveImage`
+
+`apps/web/src/components/ui/ResponsiveImage.tsx` wraps `next/image` and adapts to the
+user's data-saver preference (`navigator.connection.saveData`, or the `Save-Data: on`
+header mirrored into a cookie by `src/middleware.ts`):
+
+- `sizes` is required: describe the slot the image renders into, not the source size.
+- Pass `priority` only for above-the-fold images (profile avatar/cover, the first three
+  feed posts via `isAboveTheFold(index)`); everything else is `loading="lazy"`.
+- Quality drops from 75 to 40 in save-data mode and a blurred placeholder is shown.
+  Content images can opt into `deferOnSaveData`, which only fetches them on tap.
+
+The optimizer only fetches remote images from the indexer host
+(`NEXT_PUBLIC_INDEXER_API_URL`) and from hosts listed in `NEXT_PUBLIC_IMAGE_HOSTS`
+(comma separated). Images from other hosts are served `unoptimized`.
+
+### Measure input latency
+
+Under `next dev`, the search input records keystroke-to-paint time as
+`search-input-latency` Performance API measures (see `useInputLatency`) and warns in the
+console when a keystroke misses the 16 ms budget. For a summary in the browser console:
+
+```js
+performance.getEntriesByName("search-input-latency", "measure").map((e) => e.duration);
+```
+
+Keep expensive result updates in a `startTransition` so they never block typing.
 
 ---
 

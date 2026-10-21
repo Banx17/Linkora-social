@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { InfiniteScroll } from "@/components/InfiniteScroll";
 import { PostCard, PostCardSkeleton, type Post } from "@/components/PostCard";
+import { isAboveTheFold } from "@/lib/responsiveImage";
 import { useInfiniteFeed, type CursorPage } from "@/hooks/useInfiniteFeed";
 import { useSlowConnection } from "@/hooks/useSlowConnection";
 import { fetchFeedSnapshot, type FeedSnapshot, type FeedTab } from "@/services/feed";
@@ -163,8 +164,13 @@ export function FeedList({ tab, address, initial }: FeedListProps) {
       </div>
 
       <div className="space-y-4" data-testid="post-list">
-        {items.map((post) => (
-          <PostCard key={post.id} post={post} data-testid="post-card" />
+        {items.map((post, index) => (
+          <PostCard
+            key={post.id}
+            post={post}
+            priority={isAboveTheFold(index)}
+            data-testid="post-card"
+          />
         ))}
 
         <InfiniteScroll

@@ -290,3 +290,25 @@ describe("FeedList slow network and failures", () => {
     expect(screen.getByTestId("infinite-scroll-retry")).toBeInTheDocument();
   });
 });
+
+describe("FeedList image loading (#1748)", () => {
+  it("preloads images in the first three posts and lazy loads the rest", () => {
+    const posts = makeFirstPage().map((post, index) => ({
+      ...post,
+      imageUrl: `/media/p${index + 1}.png`,
+    }));
+
+    render(<FeedList tab="for-you" address={null} initial={initialSnapshot(posts)} />);
+
+    const images = screen
+      .getAllByTestId("post-card")
+      .map((card) => card.querySelector("img") as HTMLImageElement);
+
+    expect(images).toHaveLength(FEED_PAGE_SIZE);
+    images.slice(0, 3).forEach((img) => expect(img).toHaveAttribute("fetchpriority", "high"));
+    images.slice(3).forEach((img) => {
+      expect(img).toHaveAttribute("loading", "lazy");
+      expect(img).not.toHaveAttribute("fetchpriority");
+    });
+  });
+});
