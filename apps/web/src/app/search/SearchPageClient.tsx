@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Post,
@@ -76,6 +76,13 @@ export function SearchPageClient() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /*
+    #1747: rendering a large result list (and re-filtering / re-sorting it) is
+    marked as a low-priority transition so React can interrupt it to handle
+    keystrokes. The search input therefore never waits on result rendering;
+    `isPending` dims the stale results until the new ones are ready.
+  */
+  const [isPending, startTransition] = useTransition();
 
   const updateParams = (updates: Record<string, string>) => {
     const next = new URLSearchParams(searchParams.toString());
@@ -85,7 +92,9 @@ export function SearchPageClient() {
       else next.delete(key);
     });
 
-    router.replace(`/search?${next.toString()}`, { scroll: false });
+    startTransition(() => {
+      router.replace(`/search?${next.toString()}`, { scroll: false });
+    });
   };
 
   const submitSearch = (nextQuery: string) => {
@@ -93,7 +102,9 @@ export function SearchPageClient() {
     next.set("q", nextQuery);
     next.delete("from");
     next.delete("to");
-    router.push(`/search?${next.toString()}`);
+    startTransition(() => {
+      router.push(`/search?${next.toString()}`);
+    });
   };
 
   useEffect(() => {
@@ -120,20 +131,25 @@ export function SearchPageClient() {
         return response.json();
       })
       .then((data) => {
-        if (activeTab === "profiles") {
-          setProfiles(readProfiles(data));
-        } else {
-          setPosts(readPosts(data));
-        }
+        if (controller.signal.aborted) return;
+        // Results and the end of loading land in the same transition so the
+        // list never flashes an empty state between the two updates.
+        startTransition(() => {
+          if (activeTab === "profiles") {
+            setProfiles(readProfiles(data));
+          } else {
+            setPosts(readPosts(data));
+          }
+          setLoading(false);
+        });
       })
       .catch((err: unknown) => {
         if (err instanceof DOMException && err.name === "AbortError") return;
+        if (controller.signal.aborted) return;
         setError(err instanceof Error ? err.message : "Search request failed.");
         if (activeTab === "profiles") setProfiles([]);
         else setPosts([]);
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
+        setLoading(false);
       });
 
     return () => controller.abort();
@@ -166,6 +182,9 @@ export function SearchPageClient() {
   const hasQuery = query.trim().length > 0;
   const hasPostResults = visiblePosts.length > 0;
   const hasProfileResults = profiles.length > 0;
+  const resultsClassName = `space-y-4 transition-[opacity,filter] duration-200 motion-reduce:transition-none ${
+    isPending ? "pointer-events-none opacity-60 blur-[1px]" : "opacity-100"
+  }`;
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-10">
@@ -251,7 +270,13 @@ export function SearchPageClient() {
       )}
 
       {hasQuery && activeTab === "posts" && (
-        <div className="space-y-4" aria-live="polite">
+        <div
+          className={resultsClassName}
+          aria-live="polite"
+          aria-busy={isPending || loading}
+          data-pending={isPending ? "true" : undefined}
+          data-testid="search-results"
+        >
           {loading && Array.from({ length: 5 }, (_, index) => <PostCardSkeleton key={index} />)}
           {!loading &&
             !error &&
@@ -274,7 +299,13 @@ export function SearchPageClient() {
       )}
 
       {hasQuery && activeTab === "profiles" && (
-        <div className="space-y-4" aria-live="polite">
+        <div
+          className={resultsClassName}
+          aria-live="polite"
+          aria-busy={isPending || loading}
+          data-pending={isPending ? "true" : undefined}
+          data-testid="search-results"
+        >
           {loading && (
             <div className="rounded-lg border border-[var(--border)] bg-[var(--muted)] p-8 text-center text-[var(--text-muted)]">
               Loading profiles...

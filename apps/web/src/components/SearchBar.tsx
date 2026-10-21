@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState, useRef } from "react";
 import { validateSearchQuery } from "@/lib/validate";
 import { useSearchSuggestions, SearchSuggestion } from "@/hooks/useSearchSuggestions";
 import { useRecentSearches } from "@/hooks/useRecentSearches";
+import { useInputLatency } from "@/hooks/useInputLatency";
 
 interface SearchBarProps {
   onSearch: (query: string) => void;
@@ -40,6 +41,10 @@ export default function SearchBar({
       (forwardedInputRef as any).current = inputRef.current;
     }
   }, [forwardedInputRef]);
+
+  // Dev-only: records keystroke-to-paint time as `search-input-latency`
+  // Performance API measures and warns when a keystroke misses 16ms (#1747).
+  const recordKeystroke = useInputLatency({ name: "search-input-latency" });
 
   const { suggestions, loading, fetchSuggestions, clearSuggestions } = useSearchSuggestions();
   const { recentSearches, addRecentSearch, clearRecentSearches, removeRecentSearch } =
@@ -180,6 +185,7 @@ export default function SearchBar({
             type="text"
             value={query}
             onChange={(e) => {
+              recordKeystroke(e.nativeEvent);
               setIsFocused(true);
               setQuery(e.target.value);
             }}
