@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { VerificationBadge, type VerificationLevel } from "@/components/VerificationBadge";
 
 export interface Post {
@@ -100,6 +101,7 @@ export function PostCard({
   const likeCount = getPostLikeCount(post);
   const [animateLikeCount, setAnimateLikeCount] = useState(false);
   const [previousLikeCount, setPreviousLikeCount] = useState(likeCount);
+  const prefersReducedMotion = useReducedMotion();
 
   useEffect(() => {
     if (likeCount === previousLikeCount) {
@@ -116,19 +118,25 @@ export function PostCard({
     return () => window.clearTimeout(timeout);
   }, [likeCount, previousLikeCount]);
 
+  const layoutId = `post-${post.id}`;
+
   return (
-    <article
+    <motion.article
+      layoutId={layoutId}
       data-testid={dataTestId}
       className="rounded-xl border border-[var(--border)] bg-[var(--muted)] p-3 md:p-4 lg:p-5 shadow-lg transition-all duration-300 hover:border-violet-500/40 hover:shadow-violet-950/10"
+      style={{ contain: "layout" }}
+      transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.3, ease: "easeInOut" }}
     >
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-sm text-[var(--text-muted)]">
         <span className="inline-flex items-center gap-1.5">
-          <span
+          <motion.span
+            layoutId={`${layoutId}-author`}
             className="font-medium hover:text-[var(--foreground)] transition-colors"
             title={post.author}
           >
             By {formatAuthor(post.author)}
-          </span>
+          </motion.span>
           {post.isVerified && (
             <VerificationBadge
               level={post.verificationLevel ?? "identity"}
@@ -139,9 +147,13 @@ export function PostCard({
         <time className="text-xs text-[var(--text-muted)]">{formatDate(post)}</time>
       </div>
 
-      <p className="whitespace-pre-wrap break-words leading-relaxed text-[var(--foreground)] mb-4 text-base">
+      <motion.p
+        layoutId={`${layoutId}-content`}
+        className="whitespace-pre-wrap break-words leading-relaxed text-[var(--foreground)] mb-4 text-base"
+        style={{ contain: "layout" }}
+      >
         {highlightText(post.content, query)}
-      </p>
+      </motion.p>
 
       <div
         className="flex items-center gap-6 border-t border-[var(--border)]/40 pt-3"
@@ -177,8 +189,20 @@ export function PostCard({
           <span>Tips: {getPostTipTotal(post)}</span>
         </button>
       </div>
-    </article>
+    </motion.article>
   );
+}
+
+function useReducedMotion(): boolean {
+  const [prefersReduced, setPrefersReduced] = useState(false);
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+    setPrefersReduced(mediaQuery.matches);
+    const handler = (e: MediaQueryListEvent) => setPrefersReduced(e.matches);
+    mediaQuery.addEventListener("change", handler);
+    return () => mediaQuery.removeEventListener("change", handler);
+  }, []);
+  return prefersReduced;
 }
 
 export function PostCardSkeleton() {

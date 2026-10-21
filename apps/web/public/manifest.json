@@ -1,0 +1,44 @@
+{
+  "name": "Linkora",
+  "short_name": "Linkora",
+  "description": "Decentralised social on Stellar",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0F172A",
+  "theme_color": "#7C3AED",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/logo/logo-icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "New Post",
+      "short_name": "Post",
+      "description": "Create a new post",
+      "url": "/compose",
+      "icons": [{ "src": "/logo/logo-icon.svg", "sizes": "192x192" }]
+    },
+    {
+      "name": "Wallet",
+      "short_name": "Wallet",
+      "description": "View your wallet",
+      "url": "/wallet",
+      "icons": [{ "src": "/logo/logo-icon.svg", "sizes": "192x192" }]
+    },
+    {
+      "name": "Notifications",
+      "short_name": "Notifications",
+      "description": "View notifications",
+      "url": "/notifications",
+      "icons": [{ "src": "/logo/logo-icon.svg", "sizes": "192x192" }]
+    }
+  ],
+  "categories": ["social", "finance"],
+  "screenshots": [],
+  "prefer_related_applications": false
+}

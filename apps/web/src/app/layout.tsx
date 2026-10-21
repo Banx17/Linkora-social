@@ -14,6 +14,7 @@ import { CommandPalette } from "@/components/CommandPalette";
 import { ServiceWorkerRegistration } from "@/components/ServiceWorkerRegistration";
 import { ResourceHints, ThirdPartyScripts } from "@/components/ThirdPartyScripts";
 import { ConsentBanner } from "@/components/ConsentBanner";
+import { InstallPromptProvider, InstallPromptBanner } from "@/contexts/InstallPromptContext";
 
 export const metadata: Metadata = {
   title: "Linkora",
@@ -25,6 +26,16 @@ export const metadata: Metadata = {
     ],
     shortcut: "/logo/logo-icon.svg",
     apple: "/logo/logo-icon.svg",
+  },
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Linkora",
+  },
+  other: {
+    "theme-color": "#7C3AED",
+    "background-color": "#0F172A",
   },
 };
 
@@ -46,13 +57,16 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
           <OnboardingProvider>
             <GuidedTourProvider>
               <NotificationsProvider>
-                <NavBar />
-                <main id="main-content" tabIndex={-1} className="pb-safe md:pb-0">
-                  {children}
-                </main>
-                <GuidedTour />
-                <KeyboardShortcutsModal />
-                <CommandPalette />
+                <InstallPromptProvider>
+                  <NavBar />
+                  <main id="main-content" tabIndex={-1} className="pb-safe md:pb-0">
+                    {children}
+                  </main>
+                  <GuidedTour />
+                  <KeyboardShortcutsModal />
+                  <CommandPalette />
+                  <InstallPromptBanner />
+                </InstallPromptProvider>
               </NotificationsProvider>
             </GuidedTourProvider>
           </OnboardingProvider>
