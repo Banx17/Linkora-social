@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { validatePostContent, sanitisePostContent, POST_MAX_CHARS } from '@/lib/validate';
 import { FieldError } from './FieldError';
+import { trackPostCreated } from '@/lib/gtag';
 
 interface PostFormProps {
   /** Called with sanitised content when the form is valid and submitted. */
@@ -35,6 +36,7 @@ export function PostForm({ onSubmit, disabled = false }: PostFormProps) {
     setSubmitting(true);
     try {
       await onSubmit(sanitised);
+      trackPostCreated({ author: 'client', contentLength: sanitised.length });
       setContent('');
       setError(undefined);
     } finally {

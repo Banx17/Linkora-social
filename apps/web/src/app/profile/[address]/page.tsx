@@ -130,6 +130,17 @@ export default function ProfilePage() {
     refetch();
   });
 
+  /* ── Track profile view ──────────────────────────────────────────────── */
+
+  useEffect(() => {
+    if (state.status === "success") {
+      trackProfileViewed({
+        profileAddress: address,
+        isSelf: currentUserAddress === address,
+      });
+    }
+  }, [state.status, address, currentUserAddress]);
+
   /* ── Follow / unfollow ──────────────────────────────────────────────── */
 
   const handleFollowToggle = useCallback(async () => {

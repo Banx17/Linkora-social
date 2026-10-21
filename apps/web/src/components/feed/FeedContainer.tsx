@@ -82,10 +82,29 @@ export function FeedContainer({ authorAddress }: FeedContainerProps) {
         </button>
       </div>
 
-      {/* Error state */}
+      {/* Fetch error */}
       {error && (
         <div className="rounded-lg bg-red-500/10 border border-red-500/20 p-4 text-sm text-red-400 text-center">
           {error}
+        </div>
+      )}
+
+      {/* Mutation error toast */}
+      {postError && (
+        <div
+          role="alert"
+          aria-live="assertive"
+          className="flex items-center justify-between gap-3 rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3 text-sm text-red-400"
+        >
+          <span>{postError}</span>
+          <button
+            type="button"
+            onClick={clearPostError}
+            aria-label="Dismiss error"
+            className="shrink-0 text-red-400/70 hover:text-red-300 transition-colors"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
       )}
 
@@ -106,15 +125,35 @@ export function FeedContainer({ authorAddress }: FeedContainerProps) {
           {visiblePosts.map((post) => (
             <div
               key={post.id}
-              className={`transition-opacity duration-200 ${
-                post.isOptimistic ? "opacity-70 animate-pulse" : "opacity-100"
+              className={`transition-all duration-300 ${
+                post.isDeleting
+                  ? "opacity-0 scale-95 pointer-events-none"
+                  : post.isOptimistic
+                    ? "opacity-60"
+                    : "opacity-100"
               }`}
+              aria-hidden={post.isDeleting}
             >
               <PostCard post={post} />
-              {post.isOptimistic && (
-                <span className="block mt-1 text-right text-[10px] text-violet-400 font-medium">
-                  Posting...
-                </span>
+              {post.isPending && !post.isDeleting && (
+                <div className="flex items-center gap-1.5 mt-1 justify-end">
+                  {/* Spinner */}
+                  <span
+                    className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-violet-400 border-t-transparent"
+                    aria-hidden="true"
+                  />
+                  <span className="text-[10px] text-violet-400 font-medium">
+                    Posting…
+                  </span>
+                </div>
+              )}
+              {post.error && (
+                <p
+                  role="alert"
+                  className="mt-1 text-right text-[10px] text-red-400"
+                >
+                  {post.error}
+                </p>
               )}
             </div>
           ))}
