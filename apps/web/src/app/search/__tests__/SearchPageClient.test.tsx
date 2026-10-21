@@ -20,6 +20,10 @@ jest.mock("next/navigation", () => ({
   useSearchParams: () => mockParams,
 }));
 
+// Results land in a transition, which React may render in several time-sliced
+// chunks; give slow CI workers more than waitFor's 1s default.
+const RESULTS_TIMEOUT = { timeout: 5000 };
+
 const mockFetch = jest.fn();
 global.fetch = mockFetch as unknown as typeof fetch;
 
@@ -51,7 +55,7 @@ describe("SearchPageClient", () => {
     const results = screen.getByTestId("search-results");
     expect(results).toHaveAttribute("aria-busy", "true");
 
-    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(5));
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(5), RESULTS_TIMEOUT);
     expect(results).toHaveAttribute("aria-busy", "false");
     expect(results).not.toHaveAttribute("data-pending");
     expect(mockFetch).toHaveBeenCalledWith(
@@ -76,7 +80,7 @@ describe("SearchPageClient", () => {
     mockFetch.mockResolvedValue({ ok: true, json: async () => ({ posts: [makePost(1)] }) });
 
     render(<SearchPageClient />);
-    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(1));
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(1), RESULTS_TIMEOUT);
 
     fireEvent.change(screen.getByLabelText("Sort"), { target: { value: "recent" } });
 
@@ -90,7 +94,7 @@ describe("SearchPageClient", () => {
     });
 
     const { container } = render(<SearchPageClient />);
-    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(5));
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(5), RESULTS_TIMEOUT);
 
     const images = Array.from(container.querySelectorAll("article img"));
     expect(images).toHaveLength(5);
@@ -104,7 +108,9 @@ describe("SearchPageClient", () => {
 
     render(<SearchPageClient />);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Search request failed.");
+    expect(await screen.findByRole("alert", {}, RESULTS_TIMEOUT)).toHaveTextContent(
+      "Search request failed."
+    );
     expect(screen.queryAllByRole("article")).toHaveLength(0);
     expect(screen.getByTestId("search-results")).toHaveAttribute("aria-busy", "false");
   });
