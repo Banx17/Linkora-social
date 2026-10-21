@@ -26,7 +26,7 @@ type NavigatorWithConnection = Navigator & {
   webkitConnection?: NetworkInformationLike;
 };
 
-function getConnection(): NetworkInformationLike | undefined {
+export function getConnection(): NetworkInformationLike | undefined {
   if (typeof navigator === "undefined") return undefined;
 
   const navigatorWithConnection = navigator as NavigatorWithConnection;

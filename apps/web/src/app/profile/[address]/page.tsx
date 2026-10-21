@@ -16,6 +16,16 @@ import { FollowDrawer } from "@/components/profile/FollowDrawer";
 import { CreatorTokenPanel } from "@/components/profile/CreatorTokenPanel";
 import { VerificationBadge } from "@/components/VerificationBadge";
 import { Address } from "@stellar/stellar-sdk";
+import { ResponsiveImage } from "@/components/ui/ResponsiveImage";
+import {
+  TransactionBuilder,
+  BASE_FEE,
+  Contract,
+  Address,
+  rpc as StellarRpc,
+  nativeToScVal,
+} from "@stellar/stellar-sdk";
+import { signTransaction } from "@stellar/freighter-api";
 import { LinkoraClient } from "linkora-sdk";
 import { buildSignAndSubmit } from "@/lib/tx";
 import { addToBlockedList, removeFromBlockedList } from "@/lib/blockedStore";
@@ -283,12 +293,14 @@ export default function ProfilePage() {
     <div className="min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
       <div className="max-w-4xl mx-auto p-4 md:p-8">
         {coverUrl && (
-          <div className="mb-4 overflow-hidden rounded-2xl border border-[var(--bg-tertiary)]">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
+          <div className="relative mb-4 h-40 overflow-hidden rounded-2xl border border-[var(--bg-tertiary)] md:h-56">
+            <ResponsiveImage
               src={coverUrl}
               alt={`${profile.username}'s cover image`}
-              className="h-40 w-full object-cover md:h-56"
+              fill
+              priority
+              sizes="(min-width: 896px) 832px, 100vw"
+              className="object-cover"
               id="profile-cover"
             />
           </div>
@@ -301,9 +313,13 @@ export default function ProfilePage() {
           className="flex flex-col md:flex-row items-start md:items-center gap-4 md:gap-6 bg-[var(--bg-secondary)] p-4 md:p-6 rounded-2xl border border-[var(--bg-tertiary)]"
         >
           {/* Avatar */}
-          <img
+          <ResponsiveImage
             src={avatarUrl ?? blockieUrl(address)}
             alt={`${profile.username}'s avatar`}
+            width={96}
+            height={96}
+            priority
+            sizes="96px"
             className="w-24 h-24 rounded-full border-4 border-[var(--bg-primary)] object-cover"
             id="profile-avatar"
           />
@@ -539,7 +555,14 @@ function PostCard({ post }: { post: IndexerPost }) {
       aria-label={`Post ${post.id}`}
     >
       <div className="flex items-center gap-3 mb-3">
-        <img src={blockieUrl(post.author)} alt="" className="w-8 h-8 rounded-full" />
+        <ResponsiveImage
+          src={blockieUrl(post.author)}
+          alt=""
+          width={32}
+          height={32}
+          sizes="32px"
+          className="w-8 h-8 rounded-full"
+        />
         <span className="font-mono text-sm text-[var(--text-muted)]">{truncate(post.author)}</span>
         <span className="text-xs text-[var(--text-muted)] ml-auto">
           {ledgerToRelative(post.created_ledger)}

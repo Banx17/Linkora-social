@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { ResponsiveImage } from "@/components/ui/ResponsiveImage";
 
 /* ────────────────────────────────────────────────────────────────────────── */
 /*  Types                                                                    */
@@ -135,9 +136,12 @@ export function FollowDrawer({ isOpen, onClose, type, address }: FollowDrawerPro
               aria-label={`View profile of ${addr}`}
             >
               {/* Mini blockie */}
-              <img
+              <ResponsiveImage
                 src={`https://effigy.im/a/${addr}.svg`}
                 alt=""
+                width={40}
+                height={40}
+                sizes="40px"
                 className="w-10 h-10 rounded-full"
               />
               <span className="font-mono text-sm text-[var(--text-primary)] truncate">

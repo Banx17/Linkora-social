@@ -16,6 +16,7 @@ import { ResourceHints, ThirdPartyScripts } from "@/components/ThirdPartyScripts
 import { ConsentBanner } from "@/components/ConsentBanner";
 import { QueryProvider } from "@/contexts/QueryProvider";
 import { Toaster } from "@/components/ui/Toaster";
+import { InstallPromptProvider, InstallPromptBanner } from "@/contexts/InstallPromptContext";
 
 export const metadata: Metadata = {
   title: "Linkora",
@@ -27,6 +28,16 @@ export const metadata: Metadata = {
     ],
     shortcut: "/logo/logo-icon.svg",
     apple: "/logo/logo-icon.svg",
+  },
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Linkora",
+  },
+  other: {
+    "theme-color": "#7C3AED",
+    "background-color": "#0F172A",
   },
 };
 
@@ -45,10 +56,11 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
           {/* KeyboardShortcutsProvider reads the wallet via useWallet, so it must
             sit inside WalletProvider. NavBar and KeyboardShortcutsModal consume
             its context, so both must sit inside this provider. */}
-          <KeyboardShortcutsProvider>
-            <OnboardingProvider>
-              <GuidedTourProvider>
-                <NotificationsProvider>
+        <KeyboardShortcutsProvider>
+          <OnboardingProvider>
+            <GuidedTourProvider>
+              <NotificationsProvider>
+                <InstallPromptProvider>
                   <NavBar />
                   <main id="main-content" tabIndex={-1} className="pb-safe md:pb-0">
                     {children}
@@ -56,16 +68,14 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
                   <GuidedTour />
                   <KeyboardShortcutsModal />
                   <CommandPalette />
-                  {/* Rollback toasts for optimistic mutations (follow, like,
-                      delete, pool deposits) are rendered above page content. */}
-                  <Toaster />
-                </NotificationsProvider>
-              </GuidedTourProvider>
-            </OnboardingProvider>
-          </KeyboardShortcutsProvider>
-        </WalletProvider>
-      </ThemeProvider>
-    </QueryProvider>
+                  <InstallPromptBanner />
+                </InstallPromptProvider>
+              </NotificationsProvider>
+            </GuidedTourProvider>
+          </OnboardingProvider>
+        </KeyboardShortcutsProvider>
+      </WalletProvider>
+    </ThemeProvider>
   );
 }
 
