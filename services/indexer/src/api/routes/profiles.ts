@@ -1,8 +1,8 @@
 import { Router, Request, Response } from "express";
 import { Database } from "../../db";
-import { validateParams } from "../../middleware/validate";
+import { validateParams, validateQuery } from "../../middleware/validate";
 import { z } from "zod";
-import { stellarAddressSchema } from "@linkora/types/src/schemas";
+import { stellarAddressSchema, cursorPaginationSchema } from "@linkora/types/src/schemas";
 import { notFoundError } from "@linkora/types/src/errors";
 
 const getProfileParamsSchema = z.object({
@@ -11,6 +11,27 @@ const getProfileParamsSchema = z.object({
 
 export function createProfilesRouter(db: Database): Router {
   const router = Router();
+
+  router.get(
+    "/",
+    validateQuery(cursorPaginationSchema),
+    async (req: Request, res: Response): Promise<void> => {
+      const { limit, cursor } = req.query as unknown as z.infer<typeof cursorPaginationSchema>;
+
+      const { profiles, nextCursor } = await db.listProfilesCursor({
+        limit,
+        cursor: cursor || undefined,
+      });
+
+      res.json({
+        profiles,
+        limit,
+        cursor: cursor ?? null,
+        next_cursor: nextCursor,
+        has_more: nextCursor !== null,
+      });
+    }
+  );
 
   router.get(
     "/:address",

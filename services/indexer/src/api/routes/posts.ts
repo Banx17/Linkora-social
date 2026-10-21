@@ -284,17 +284,17 @@ export function createPostsRouter(
         typeof listPostsQuerySchema
       >;
 
-      const { posts, total, hasMore } = await db.listPostsCursor({
+      const { posts, nextCursor } = await db.listPostsCursor({
         author: author || undefined,
         limit,
         cursor: cursor || undefined,
       });
       res.json({
         posts,
-        total,
         limit,
         cursor: cursor ?? null,
-        has_more: hasMore,
+        next_cursor: nextCursor,
+        has_more: nextCursor !== null,
       });
     }
   );

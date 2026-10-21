@@ -197,6 +197,27 @@ paths:
                 type: string
 
   # ── Profiles ────────────────────────────────────────────────────────────────
+  /api/profiles:
+    get:
+      summary: List profiles
+      operationId: listProfiles
+      tags: [Profiles]
+      security:
+        - StellarSig: []
+        - {}
+      parameters:
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/cursor"
+      responses:
+        "200":
+          description: Cursor-paginated list of profiles
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProfileList"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+
   /api/profiles/{address}:
     get:
       summary: Get profile by address
@@ -558,18 +579,33 @@ paths:
       security:
         - StellarSig: []
         - {}
+      parameters:
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/cursor"
       responses:
         "200":
-          description: All tip pools.
+          description: Cursor-paginated list of tip pools.
           content:
             application/json:
               schema:
                 type: object
+                required: [pools, limit, cursor, next_cursor, has_more]
                 properties:
                   pools:
                     type: array
                     items:
                       $ref: "#/components/schemas/Pool"
+                  limit:
+                    type: integer
+                  cursor:
+                    type: [string, "null"]
+                  next_cursor:
+                    type: [string, "null"]
+                    description: Pass as `cursor` to fetch the next page. `null` when no more pages.
+                  has_more:
+                    type: boolean
+        "400":
+          $ref: "#/components/responses/ValidationError"
 
   /api/pools/{id}:
     get:
@@ -628,19 +664,29 @@ paths:
       parameters:
         - $ref: "#/components/parameters/limit"
         - $ref: "#/components/parameters/cursor"
-        - name: offset
-          in: query
-          required: false
-          schema:
-            type: integer
       responses:
         "200":
-          description: Paginated proposals.
+          description: Cursor-paginated proposals.
           content:
             application/json:
               schema:
                 type: object
-                additionalProperties: true
+                required: [proposals, limit, cursor, next_cursor, has_more]
+                properties:
+                  proposals:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                  limit:
+                    type: integer
+                  cursor:
+                    type: [string, "null"]
+                  next_cursor:
+                    type: [string, "null"]
+                    description: Pass as `cursor` to fetch the next page. `null` when no more pages.
+                  has_more:
+                    type: boolean
         "400":
           $ref: "#/components/responses/ValidationError"
 
@@ -1120,6 +1166,25 @@ components:
         updated_ledger:
           type: integer
 
+    ProfileList:
+      type: object
+      required: [profiles, limit, cursor, next_cursor, has_more]
+      properties:
+        profiles:
+          type: array
+          items:
+            $ref: "#/components/schemas/Profile"
+        limit:
+          type: integer
+        cursor:
+          type: [string, "null"]
+          description: The cursor token that was used to fetch this page.
+        next_cursor:
+          type: [string, "null"]
+          description: Pass as `cursor` to fetch the next page. `null` when no more pages exist.
+        has_more:
+          type: boolean
+
     Post:
       type: object
       required: [id, author, deleted, tip_total, like_count, created_ledger]
@@ -1144,24 +1209,26 @@ components:
 
     PostList:
       type: object
-      required: [posts, total, limit, cursor, has_more]
+      required: [posts, limit, cursor, next_cursor, has_more]
       properties:
         posts:
           type: array
           items:
             $ref: "#/components/schemas/Post"
-        total:
-          type: integer
         limit:
           type: integer
         cursor:
           type: [string, "null"]
+          description: The cursor token that was used to fetch this page.
+        next_cursor:
+          type: [string, "null"]
+          description: Pass as `cursor` to fetch the next page. `null` when no more pages exist.
         has_more:
           type: boolean
 
     FollowerList:
       type: object
-      required: [address, followers, total, limit, cursor, next_cursor]
+      required: [address, followers, total, limit, cursor, next_cursor, has_more]
       properties:
         address:
           type: string
@@ -1177,10 +1244,13 @@ components:
           type: [string, "null"]
         next_cursor:
           type: [string, "null"]
+          description: Pass as `cursor` to fetch the next page. `null` when no more pages.
+        has_more:
+          type: boolean
 
     FollowingList:
       type: object
-      required: [address, following, total, limit, cursor, next_cursor]
+      required: [address, following, total, limit, cursor, next_cursor, has_more]
       properties:
         address:
           type: string
@@ -1196,6 +1266,9 @@ components:
           type: [string, "null"]
         next_cursor:
           type: [string, "null"]
+          description: Pass as `cursor` to fetch the next page. `null` when no more pages.
+        has_more:
+          type: boolean
 
     Pool:
       type: object

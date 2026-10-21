@@ -1,22 +1,23 @@
 import { Router, Request, Response } from "express";
 import { Database } from "../../db";
 import { validateQuery } from "../../middleware/validate";
-import { offsetPaginationSchema } from "@linkora/types/src/schemas";
+import { cursorPaginationSchema } from "@linkora/types/src/schemas";
 import { internalError } from "@linkora/types/src/errors";
+import { z } from "zod";
 
 export function createGovernanceRouter(db: Database): Router {
   const router = Router();
 
   router.get(
     "/proposals",
-    validateQuery(offsetPaginationSchema),
+    validateQuery(cursorPaginationSchema),
     async (req: Request, res: Response): Promise<void> => {
-      const { limit, offset } = req.query as unknown as { limit: number; offset: number };
+      const { limit, cursor } = req.query as unknown as z.infer<typeof cursorPaginationSchema>;
 
       try {
-        const { proposals, total } = await db.listGovernanceProposals({
+        const { proposals, nextCursor } = await db.listGovernanceProposalsCursor({
           limit,
-          offset,
+          cursor: cursor || undefined,
         });
 
         const serializedProposals = proposals.map((p) => ({
@@ -29,10 +30,10 @@ export function createGovernanceRouter(db: Database): Router {
 
         res.json({
           proposals: serializedProposals,
-          total,
           limit,
-          offset,
-          has_more: offset + proposals.length < total,
+          cursor: cursor ?? null,
+          next_cursor: nextCursor,
+          has_more: nextCursor !== null,
         });
       } catch (error) {
         const err = internalError("Failed to list proposals");

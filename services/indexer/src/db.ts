@@ -176,11 +176,42 @@ export interface Database {
     limit: number;
     offset: number;
   }): Promise<{ posts: Post[]; total: number }>;
+  /**
+   * Cursor-based post list. `cursor` is the opaque base64 token from the
+   * previous response's `next_cursor` field (encodes `"isoTimestamp|id"`).
+   * Returns `next_cursor: null` when no further pages exist.
+   */
   listPostsCursor(filters: {
     author?: string;
     limit: number;
-    cursor?: number;
-  }): Promise<{ posts: Post[]; total: number; hasMore: boolean }>;
+    cursor?: string;
+  }): Promise<{ posts: Post[]; nextCursor: string | null }>;
+
+  /**
+   * Cursor-based governance proposal list.
+   * `cursor` encodes `"proposalId|proposalId"` (numeric, proposal_id DESC).
+   */
+  listGovernanceProposalsCursor(filters: {
+    limit: number;
+    cursor?: string;
+  }): Promise<{ proposals: GovernanceProposal[]; nextCursor: string | null }>;
+
+  /**
+   * Cursor-based pool list. `cursor` encodes `"isoTimestamp|pool_id"`.
+   */
+  listPoolsCursor(filters: {
+    limit: number;
+    cursor?: string;
+  }): Promise<{ pools: Pool[]; nextCursor: string | null }>;
+
+  /**
+   * Cursor-based profiles list. `cursor` encodes `"isoTimestamp|address"`.
+   */
+  listProfilesCursor(filters: {
+    limit: number;
+    cursor?: string;
+  }): Promise<{ profiles: Profile[]; nextCursor: string | null }>;
+
   getFeed?(filters: {
     viewer?: string;
     limit: number;
