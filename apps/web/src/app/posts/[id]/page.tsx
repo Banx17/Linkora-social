@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { motion, AnimatePresence } from "framer-motion";
 import { LinkoraClient, type Post } from "linkora-sdk";
 import { useComments } from "@/hooks/useComments";
 import { useWallet } from "@/hooks/useWallet";
@@ -31,6 +32,18 @@ function formatRelativeTime(iso: string): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
+}
+
+function useReducedMotion(): boolean {
+  const [prefersReduced, setPrefersReduced] = useState(false);
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+    setPrefersReduced(mediaQuery.matches);
+    const handler = (e: MediaQueryListEvent) => setPrefersReduced(e.matches);
+    mediaQuery.addEventListener("change", handler);
+    return () => mediaQuery.removeEventListener("change", handler);
+  }, []);
+  return prefersReduced;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -145,6 +158,9 @@ export default function PostDetailPage() {
   const remaining = MAX_COMMENT_CHARS - commentText.length;
   const overLimit = remaining < 0;
 
+  const prefersReducedMotion = useReducedMotion();
+  const layoutId = `post-${postId}`;
+
   // ── Loading / error states ─────────────────────────────────────────────────
 
   if (loading) {
@@ -176,34 +192,54 @@ export default function PostDetailPage() {
   // ── Main render ────────────────────────────────────────────────────────────
 
   return (
-    <main className="max-w-xl mx-auto px-4 py-12 flex flex-col gap-8">
-      <Link
-        href="/explore"
-        className="inline-block text-sm font-semibold text-violet-500 hover:underline"
-      >
-        ← Back to Explore
-      </Link>
+    <AnimatePresence mode="wait">
+      <main className="max-w-xl mx-auto px-4 py-12 flex flex-col gap-8">
+        <Link
+          href="/explore"
+          className="inline-block text-sm font-semibold text-violet-500 hover:underline"
+        >
+          ← Back to Explore
+        </Link>
 
-      {/* ── Post card ─────────────────────────────────────────────────────── */}
-      <h1 className="sr-only">Post Detail</h1>
-      <article className="bg-[var(--muted)] border border-[var(--border)] rounded-2xl p-6 shadow-xl flex flex-col gap-4">
-        {/* Author */}
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-[var(--accent)] flex items-center justify-center text-white font-bold text-sm">
-            {post.author.slice(0, 2).toUpperCase()}
+        {/* ── Post card ─────────────────────────────────────────────────────── */}
+        <h1 className="sr-only">Post Detail</h1>
+        <motion.article
+          layoutId={layoutId}
+          className="bg-[var(--muted)] border border-[var(--border)] rounded-2xl p-6 shadow-xl flex flex-col gap-4"
+          style={{ contain: "layout" }}
+          initial={false}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0, scale: 0.95 }}
+          transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.3, ease: "easeInOut" }}
+        >
+          {/* Author */}
+          <div className="flex items-center gap-3">
+            <motion.div
+              layoutId={`${layoutId}-avatar`}
+              className="w-10 h-10 rounded-full bg-[var(--accent)] flex items-center justify-center text-white font-bold text-sm"
+              style={{ contain: "layout" }}
+            >
+              {post.author.slice(0, 2).toUpperCase()}
+            </motion.div>
+            <div className="flex flex-col">
+              <motion.span
+                layoutId={`${layoutId}-author`}
+                className="text-sm font-bold text-white"
+              >
+                {formatAddress(post.author)}
+              </motion.span>
+              <span className="text-xs text-[var(--text-muted)] font-mono">{post.author}</span>
+            </div>
           </div>
-          <div className="flex flex-col">
-            <span className="text-sm font-bold text-white">
-              {formatAddress(post.author)}
-            </span>
-            <span className="text-xs text-[var(--text-muted)] font-mono">{post.author}</span>
-          </div>
-        </div>
 
-        {/* Content */}
-        <p className="text-white text-lg break-words whitespace-pre-wrap leading-relaxed">
-          {post.content}
-        </p>
+          {/* Content */}
+          <motion.p
+            layoutId={`${layoutId}-content`}
+            className="text-white text-lg break-words whitespace-pre-wrap leading-relaxed"
+            style={{ contain: "layout" }}
+          >
+            {post.content}
+          </motion.p>
 
         {/* Metrics + share */}
         <div className="border-t border-[var(--border)] pt-4 mt-2 flex flex-wrap items-center gap-6 text-xs text-[var(--text-muted)]">
@@ -244,7 +280,7 @@ export default function PostDetailPage() {
             )}
           </button>
         </div>
-      </article>
+      </motion.article>
 
       {/* ── Comments section ──────────────────────────────────────────────── */}
       <section aria-label="Comments">
@@ -411,5 +447,6 @@ export default function PostDetailPage() {
         )}
       </section>
     </main>
-  );
+  </AnimatePresence>
+);
 }

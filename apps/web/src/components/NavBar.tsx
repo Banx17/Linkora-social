@@ -235,52 +235,54 @@ export function NavBar() {
                 </svg>
               </Link>
               {commandPaletteEnabled && (
-              <button
-                onClick={openCommandPalette}
-                className="hidden lg:flex items-center gap-1.5 px-2 py-1 text-xs text-[var(--text-muted)] border border-[var(--border)] rounded-lg hover:border-violet-500/50 hover:text-violet-400 transition-colors"
-                aria-label="Open command palette (⌘K)"
-                title="Command Palette (⌘K / Ctrl+K)"
-                data-testid="command-palette-entry"
-              >
-                <svg
-                  className="w-3.5 h-3.5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  strokeWidth={2}
-                  stroke="currentColor"
-                  aria-hidden="true"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                  />
-                </svg>
-                <span className="font-medium">⌘K</span>
-              </button>
-              <button
-                onClick={openHelpModal}
-                className="rounded-lg p-1.5 text-[var(--text-muted)] hover:text-violet-400 transition-colors"
-                aria-label="Keyboard shortcuts"
-                title="Keyboard shortcuts (?)"
-                data-testid="keyboard-shortcuts-entry"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  strokeWidth={1.5}
-                  stroke="currentColor"
-                  className="h-5 w-5"
-                  aria-hidden="true"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 5.25h.008v.008H12v-.008Z"
-                  />
-                </svg>
-              </button>
+                <>
+                  <button
+                    onClick={openCommandPalette}
+                    className="hidden lg:flex items-center gap-1.5 px-2 py-1 text-xs text-[var(--text-muted)] border border-[var(--border)] rounded-lg hover:border-violet-500/50 hover:text-violet-400 transition-colors"
+                    aria-label="Open command palette (⌘K)"
+                    title="Command Palette (⌘K / Ctrl+K)"
+                    data-testid="command-palette-entry"
+                  >
+                    <svg
+                      className="w-3.5 h-3.5"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      strokeWidth={2}
+                      stroke="currentColor"
+                      aria-hidden="true"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                      />
+                    </svg>
+                    <span className="font-medium">⌘K</span>
+                  </button>
+                  <button
+                    onClick={openHelpModal}
+                    className="rounded-lg p-1.5 text-[var(--text-muted)] hover:text-violet-400 transition-colors"
+                    aria-label="Keyboard shortcuts"
+                    title="Keyboard shortcuts (?)"
+                    data-testid="keyboard-shortcuts-entry"
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      strokeWidth={1.5}
+                      stroke="currentColor"
+                      className="h-5 w-5"
+                      aria-hidden="true"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 5.25h.008v.008H12v-.008Z"
+                      />
+                    </svg>
+                  </button>
+                </>
               )}
               <NotificationBell />
             </div>
