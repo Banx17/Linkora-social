@@ -1,7 +1,7 @@
-const STATIC_CACHE = "linkora-static-v1";
-const DYNAMIC_CACHE = "linkora-dynamic-v1";
-const API_CACHE = "linkora-api-v1";
-const PRECACHE_URLS = ["/", "/feed"];
+const STATIC_CACHE = "linkora-static-v2";
+const DYNAMIC_CACHE = "linkora-dynamic-v2";
+const API_CACHE = "linkora-api-v2";
+const PRECACHE_URLS = ["/", "/feed", "/offline.html"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -62,7 +62,7 @@ self.addEventListener("fetch", (event) => {
         caches.open(DYNAMIC_CACHE).then((cache) => cache.put(request, clone));
         return response;
       })
-      .catch(() => caches.match(request))
+      .catch(() => caches.match(request).then((cached) => cached || caches.match("/offline.html")))
   );
 });
 

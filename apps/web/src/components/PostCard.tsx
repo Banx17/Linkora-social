@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { VerificationBadge, type VerificationLevel } from "@/components/VerificationBadge";
+import { ResponsiveImage } from "@/components/ui/ResponsiveImage";
 
 export interface Post {
   id: string | number;
@@ -28,8 +30,15 @@ interface PostCardProps {
   isTipping?: boolean;
   tourAnchor?: boolean;
   disabled?: boolean;
+  /** Above the fold (e.g. one of the first feed posts): preload the post image. */
+  priority?: boolean;
+  /** `sizes` for the post image; defaults to the max-w-2xl feed column. */
+  imageSizes?: string;
   "data-testid"?: string;
 }
+
+// The feed column is max-w-2xl (672px) minus page padding.
+export const FEED_POST_IMAGE_SIZES = "(min-width: 672px) 640px, 100vw";
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -95,11 +104,14 @@ export function PostCard({
   isTipping,
   tourAnchor,
   disabled = false,
+  priority = false,
+  imageSizes = FEED_POST_IMAGE_SIZES,
   "data-testid": dataTestId,
 }: PostCardProps) {
   const likeCount = getPostLikeCount(post);
   const [animateLikeCount, setAnimateLikeCount] = useState(false);
   const [previousLikeCount, setPreviousLikeCount] = useState(likeCount);
+  const prefersReducedMotion = useReducedMotion();
 
   useEffect(() => {
     if (likeCount === previousLikeCount) {
@@ -116,19 +128,25 @@ export function PostCard({
     return () => window.clearTimeout(timeout);
   }, [likeCount, previousLikeCount]);
 
+  const layoutId = `post-${post.id}`;
+
   return (
-    <article
+    <motion.article
+      layoutId={layoutId}
       data-testid={dataTestId}
       className="rounded-xl border border-[var(--border)] bg-[var(--muted)] p-3 md:p-4 lg:p-5 shadow-lg transition-all duration-300 hover:border-violet-500/40 hover:shadow-violet-950/10"
+      style={{ contain: "layout" }}
+      transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.3, ease: "easeInOut" }}
     >
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-sm text-[var(--text-muted)]">
         <span className="inline-flex items-center gap-1.5">
-          <span
+          <motion.span
+            layoutId={`${layoutId}-author`}
             className="font-medium hover:text-[var(--foreground)] transition-colors"
             title={post.author}
           >
             By {formatAuthor(post.author)}
-          </span>
+          </motion.span>
           {post.isVerified && (
             <VerificationBadge
               level={post.verificationLevel ?? "identity"}
@@ -139,9 +157,27 @@ export function PostCard({
         <time className="text-xs text-[var(--text-muted)]">{formatDate(post)}</time>
       </div>
 
-      <p className="whitespace-pre-wrap break-words leading-relaxed text-[var(--foreground)] mb-4 text-base">
+      <motion.p
+        layoutId={`${layoutId}-content`}
+        className="whitespace-pre-wrap break-words leading-relaxed text-[var(--foreground)] mb-4 text-base"
+        style={{ contain: "layout" }}
+      >
         {highlightText(post.content, query)}
-      </p>
+      </motion.p>
+
+      {post.imageUrl && (
+        <div className="relative mb-4 aspect-video overflow-hidden rounded-lg bg-zinc-800">
+          <ResponsiveImage
+            src={post.imageUrl}
+            alt=""
+            fill
+            sizes={imageSizes}
+            priority={priority}
+            deferOnSaveData
+            className="object-cover"
+          />
+        </div>
+      )}
 
       <div
         className="flex items-center gap-6 border-t border-[var(--border)]/40 pt-3"
@@ -177,7 +213,7 @@ export function PostCard({
           <span>Tips: {getPostTipTotal(post)}</span>
         </button>
       </div>
-    </article>
+    </motion.article>
   );
 }
 

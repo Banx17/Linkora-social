@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useCallback, type CSSProperties } from "react";
+import { useState, useCallback, useEffect, useRef, type CSSProperties } from "react";
 import type { PoolData, TokenMeta } from "@/hooks/usePools";
 import { formatTokenAmount, parseTokenAmount } from "@/hooks/usePools";
 import { useDeposit } from "@/hooks/usePoolContract";
 import { TxStatusBanner } from "./TxStatusBanner";
 import { PoolTxConfirmDialog } from "./PoolTxConfirmDialog";
+import { trackPoolJoined } from "@/lib/gtag";
 
 interface DepositTabProps {
   pool: PoolData;
@@ -28,6 +29,21 @@ export function DepositTab({
   const [amountError, setAmountError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const { status, result, error, deposit, reset } = useDeposit();
+
+  // Capture the pending deposit amount so the success effect can read it.
+  const pendingAmount = useRef<string>("");
+
+  // Fire pool_joined event once the deposit transaction is confirmed on-chain.
+  useEffect(() => {
+    if (status === "success" && pendingAmount.current) {
+      trackPoolJoined({
+        poolId: pool.pool_id,
+        userAddress: currentUser,
+        amount: pendingAmount.current,
+      });
+      pendingAmount.current = "";
+    }
+  }, [status, pool.pool_id, currentUser]);
 
   const decimals = tokenMeta?.decimals ?? 7;
   const symbol = tokenMeta?.symbol ?? "TOKEN";
@@ -72,6 +88,7 @@ export function DepositTab({
 
   const handleConfirm = useCallback(async () => {
     setConfirmOpen(false);
+    pendingAmount.current = amount;
     await deposit(currentUser, pool.pool_id, pool.token, amount, decimals, contractAddress);
   }, [amount, deposit, currentUser, pool, decimals, contractAddress]);
 
