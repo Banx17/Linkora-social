@@ -412,6 +412,51 @@ describe("prepare*Tx methods (Submittable)", () => {
     );
   });
 
+  it("prepareCommitPostTx fetches sequence and uses prepareTransaction", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    jest.spyOn(client as any, "getAccountForTx").mockResolvedValue(new Account("GAUTHOR", "100"));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    jest.spyOn(client, "prepareTransaction").mockResolvedValue({
+      toEnvelope: () => ({ toXDR: () => "PREPARED_XDR" }),
+    } as unknown as Awaited<ReturnType<typeof client.prepareTransaction>>);
+
+    const hash = new Uint8Array(32).fill(7);
+    const result = await client.prepareCommitPostTx("GAUTHOR", hash, 1700000000n);
+    expect(result).toBe("PREPARED_XDR");
+    expect(client.prepareTransaction).toHaveBeenCalledWith(
+      "commit_post",
+      expect.objectContaining({ _accountId: "GAUTHOR" }),
+      addr("GAUTHOR"),
+      expect.objectContaining({ _val: expect.anything() }),
+      val(1700000000n)
+    );
+  });
+
+  it("prepareCommitPostTx rejects a hash that is not 32 bytes", async () => {
+    await expect(client.prepareCommitPostTx("GAUTHOR", new Uint8Array(16), 1n)).rejects.toThrow(
+      /32 bytes/
+    );
+  });
+
+  it("prepareRevealPostTx fetches sequence and uses prepareTransaction", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    jest.spyOn(client as any, "getAccountForTx").mockResolvedValue(new Account("GAUTHOR", "100"));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    jest.spyOn(client, "prepareTransaction").mockResolvedValue({
+      toEnvelope: () => ({ toXDR: () => "PREPARED_XDR" }),
+    } as unknown as Awaited<ReturnType<typeof client.prepareTransaction>>);
+
+    const result = await client.prepareRevealPostTx("GAUTHOR", 7n, "the real content");
+    expect(result).toBe("PREPARED_XDR");
+    expect(client.prepareTransaction).toHaveBeenCalledWith(
+      "reveal_post",
+      expect.objectContaining({ _accountId: "GAUTHOR" }),
+      addr("GAUTHOR"),
+      val(7n),
+      val("the real content")
+    );
+  });
+
   it("prepareCreatePoolTx fetches sequence and uses prepareTransaction", async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     jest.spyOn(client as any, "getAccountForTx").mockResolvedValue(new Account("GA", "100"));

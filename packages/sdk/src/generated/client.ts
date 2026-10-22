@@ -240,6 +240,54 @@ export class GeneratedLinkoraClient {
   }
 
   /**
+   * Contract entrypoint: `get_committed_post`.
+   * SDK method: `getCommittedPost`.
+   */
+  async getCommittedPost(post_id: bigint): Promise<import("./types.js").CommittedPost | null> {
+    const retval = await this.simulateCall("get_committed_post", scvU64(post_id));
+    if (!retval) return null;
+    try {
+      const raw = scValToNative(retval);
+      return raw == null ? null : (raw as import("./types.js").CommittedPost);
+    } catch (e) {
+      if (e instanceof NotFoundError) return null;
+      throw e;
+    }
+  }
+
+  /**
+   * Contract entrypoint: `commit_post`.
+   * SDK method: `commitPost`.
+   */
+  async commitPost(
+    author: string,
+    content_hash: Uint8Array,
+    reveal_time: bigint
+  ): Promise<bigint> {
+    const retval = await this.simulateCall(
+      "commit_post",
+      scvAddress(author),
+      nativeToScVal(content_hash),
+      scvU64(reveal_time)
+    );
+    if (!retval) return 0n;
+    return scValToNative(retval) as bigint;
+  }
+
+  /**
+   * Contract entrypoint: `reveal_post`.
+   * SDK method: `revealPost`.
+   */
+  async revealPost(author: string, post_id: bigint, content: string): Promise<void> {
+    await this.simulateCall(
+      "reveal_post",
+      scvAddress(author),
+      scvU64(post_id),
+      scvString(content)
+    );
+  }
+
+  /**
    * Contract entrypoint: `get_followers`.
    * SDK method: `getFollowers`.
    */

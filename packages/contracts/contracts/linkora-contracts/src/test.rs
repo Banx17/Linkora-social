@@ -1617,6 +1617,185 @@ fn test_create_post_rejects_oversized_content() {
     client.create_post(&author, &String::from_str(&env, &long_content));
 }
 
+// ── Time-locked posts (commit-reveal) ────────────────────────────────────
+
+/// sha256 of the raw bytes of `content`, the same digest the contract commits
+/// to in `commit_post`.
+fn sha256_of(env: &Env, content: &String) -> BytesN<32> {
+    let mut buf = alloc::vec![0u8; content.len() as usize];
+    content.copy_into_slice(&mut buf);
+    env.crypto().sha256(&Bytes::from_slice(env, &buf)).into()
+}
+
+#[test]
+fn test_commit_post_stores_hash_and_reveal_time() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+
+    let author = Address::generate(&env);
+    let content = String::from_str(&env, "the real content");
+    let hash = sha256_of(&env, &content);
+
+    let post_id = client.commit_post(&author, &hash, &1_000);
+
+    // The placeholder post exists so feeds and indexers can show it.
+    let post = client.get_post(&post_id).unwrap();
+    assert_eq!(post.author, author);
+    assert_eq!(post.content, String::from_str(&env, "[committed post]"));
+
+    // The commit state holds the hash and the reveal time.
+    let committed = client.get_committed_post(&post_id).unwrap();
+    assert_eq!(committed.post_id, post_id);
+    assert_eq!(committed.author, author);
+    assert_eq!(committed.content_hash, hash);
+    assert_eq!(committed.reveal_time, 1_000);
+}
+
+#[test]
+fn test_commit_post_publishes_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+
+    let author = Address::generate(&env);
+    let hash = sha256_of(&env, &String::from_str(&env, "the real content"));
+    let post_id = client.commit_post(&author, &hash, &1_000);
+
+    let expected = PostCommittedEvent {
+        version: EVENT_VERSION,
+        post_id,
+        author: author.clone(),
+        content_hash: hash,
+        reveal_time: 1_000,
+    };
+    let expected_xdr = expected.to_xdr(&env, &client.address);
+    let events = env.events().all();
+    assert!(events.events().iter().any(|event| *event == expected_xdr));
+}
+
+#[test]
+#[should_panic(expected = "reveal time must be in the future")]
+fn test_commit_post_rejects_reveal_time_in_the_past() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+
+    let author = Address::generate(&env);
+    let hash = sha256_of(&env, &String::from_str(&env, "the real content"));
+    client.commit_post(&author, &hash, &0);
+}
+
+#[test]
+#[should_panic(expected = "reveal time not reached")]
+fn test_reveal_post_before_reveal_time_reverts() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+
+    let author = Address::generate(&env);
+    let content = String::from_str(&env, "the real content");
+    let hash = sha256_of(&env, &content);
+    let post_id = client.commit_post(&author, &hash, &1_000);
+
+    // The ledger timestamp is still 0, the reveal time has not been reached.
+    client.reveal_post(&author, &post_id, &content);
+}
+
+#[test]
+#[should_panic(expected = "content hash mismatch")]
+fn test_reveal_post_rejects_content_not_matching_the_hash() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+
+    let author = Address::generate(&env);
+    let content = String::from_str(&env, "the real content");
+    let hash = sha256_of(&env, &content);
+    let post_id = client.commit_post(&author, &hash, &1_000);
+
+    env.ledger().set_timestamp(2_000);
+    let other_content = String::from_str(&env, "some other content");
+    client.reveal_post(&author, &post_id, &other_content);
+}
+
+#[test]
+#[should_panic(expected = "only author can reveal post")]
+fn test_reveal_post_rejects_other_author() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+
+    let author = Address::generate(&env);
+    let other = Address::generate(&env);
+    let content = String::from_str(&env, "the real content");
+    let hash = sha256_of(&env, &content);
+    let post_id = client.commit_post(&author, &hash, &1_000);
+
+    env.ledger().set_timestamp(2_000);
+    client.reveal_post(&other, &post_id, &content);
+}
+
+#[test]
+fn test_reveal_post_replaces_placeholder_and_clears_commit() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+
+    let author = Address::generate(&env);
+    let content = String::from_str(&env, "the real content");
+    let hash = sha256_of(&env, &content);
+    let post_id = client.commit_post(&author, &hash, &1_000);
+
+    // Reveal once the reveal time has passed.
+    env.ledger().set_timestamp(2_000);
+    client.reveal_post(&author, &post_id, &content);
+
+    let post = client.get_post(&post_id).unwrap();
+    assert_eq!(post.content, content);
+    assert_eq!(post.author, author);
+
+    // The commit state is cleared: the post is not committed anymore.
+    assert!(client.get_committed_post(&post_id).is_none());
+}
+
+#[test]
+fn test_reveal_post_publishes_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+
+    let author = Address::generate(&env);
+    let content = String::from_str(&env, "the real content");
+    let hash = sha256_of(&env, &content);
+    let post_id = client.commit_post(&author, &hash, &1_000);
+
+    env.ledger().set_timestamp(2_000);
+    client.reveal_post(&author, &post_id, &content);
+
+    let expected = PostRevealedEvent {
+        version: EVENT_VERSION,
+        post_id,
+        author: author.clone(),
+        content_hash: hash,
+    };
+    let expected_xdr = expected.to_xdr(&env, &client.address);
+    let events = env.events().all();
+    assert!(events.events().iter().any(|event| *event == expected_xdr));
+}
+
+#[test]
+#[should_panic(expected = "post is not committed")]
+fn test_reveal_post_rejects_post_that_was_never_committed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+
+    let author = Address::generate(&env);
+    let post_id = client.create_post(&author, &String::from_str(&env, "hello"));
+    client.reveal_post(&author, &post_id, &String::from_str(&env, "hello"));
+}
+
 #[test]
 #[should_panic(expected = "tip amount must be positive")]
 fn test_tip_rejects_zero_amount() {

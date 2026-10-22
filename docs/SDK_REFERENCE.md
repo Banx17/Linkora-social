@@ -180,6 +180,8 @@ the transaction. Bind the result to a `string` to see the intended type.
 | `deleteProfile(user: string)` | `const xdr: string = client.deleteProfile("G...");` |
 | `createPost(author: string, content: string)` | `const xdr: string = client.createPost("G...", "Hello");` |
 | `deletePost(author: string, postId: number \| bigint)` | `const xdr: string = client.deletePost("G...", 1n);` |
+| `commitPost(author: string, contentHash: Uint8Array, revealTime: number \| bigint)` | `const xdr: string = client.commitPost("G...", new Uint8Array(32), 1700000000n);` |
+| `revealPost(author: string, postId: number \| bigint, content: string)` | `const xdr: string = client.revealPost("G...", 1n, "the real content");` |
 | `follow(follower: string, followee: string)` | `const xdr: string = client.follow("G...", "G...");` |
 | `unfollow(follower: string, followee: string)` | `const xdr: string = client.unfollow("G...", "G...");` |
 | `blockUser(blocker: string, blocked: string)` | `const xdr: string = client.blockUser("G...", "G...");` |
@@ -260,6 +262,8 @@ const hash = await client.submitTransaction(signedXdr, wallet);
 | `preparePoolDepositTx(depositor: string, poolId: string, token: string, amount: number \| bigint, horizonUrl?: string)` | `const xdr: string = await client.preparePoolDepositTx("G...", "community", "C...", 100n);` |
 | `prepareIncreaseAllowanceTx(depositor: string, token: string, spender: string, amount: number \| bigint, horizonUrl?: string)` | `const xdr: string = await client.prepareIncreaseAllowanceTx("G...", "C...", "C...", 100n);` |
 | `preparePoolWithdrawTx(signers: string[], poolId: string, amount: number \| bigint, recipient: string, horizonUrl?: string)` | `const xdr: string = await client.preparePoolWithdrawTx(["G..."], "community", 100n, "G...");` |
+| `prepareCommitPostTx(author: string, contentHash: Uint8Array, revealTime: number \| bigint, horizonUrl?: string)` | `const xdr: string = await client.prepareCommitPostTx("G...", new Uint8Array(32), 1700000000n);` |
+| `prepareRevealPostTx(author: string, postId: number \| bigint, content: string, horizonUrl?: string)` | `const xdr: string = await client.prepareRevealPostTx("G...", 1n, "the real content");` |
 | `prepareAddPoolAdminTx(signers: string[], poolId: string, newAdmin: string, horizonUrl?: string)` | `const xdr: string = await client.prepareAddPoolAdminTx(["G..."], "community", "G...");` |
 | `prepareRemovePoolAdminTx(signers: string[], poolId: string, admin: string, horizonUrl?: string)` | `const xdr: string = await client.prepareRemovePoolAdminTx(["G..."], "community", "G...");` |
 | `prepareUpdatePoolThresholdTx(signers: string[], poolId: string, threshold: number \| bigint, horizonUrl?: string)` | `const xdr: string = await client.prepareUpdatePoolThresholdTx(["G..."], "community", 2);` |
