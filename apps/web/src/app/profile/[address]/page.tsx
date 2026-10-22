@@ -17,6 +17,7 @@ import { CreatorTokenPanel } from "@/components/profile/CreatorTokenPanel";
 import { VerificationBadge } from "@/components/VerificationBadge";
 import { Address } from "@stellar/stellar-sdk";
 import { ResponsiveImage } from "@/components/ui/ResponsiveImage";
+import { ProfileHeaderSkeleton } from "@/components/skeletons";
 import {
   TransactionBuilder,
   BASE_FEE,
@@ -254,13 +255,9 @@ export default function ProfilePage() {
 
   if (state.status === "loading") {
     return (
-      <div className="flex h-screen items-center justify-center bg-[var(--bg-primary)]">
-        <div className="animate-pulse flex space-x-4 w-80">
-          <div className="rounded-full bg-[var(--bg-tertiary)] h-14 w-14 shrink-0" />
-          <div className="flex-1 space-y-3 py-1">
-            <div className="h-4 bg-[var(--bg-tertiary)] rounded w-3/4" />
-            <div className="h-4 bg-[var(--bg-tertiary)] rounded w-1/2" />
-          </div>
+      <div className="min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
+        <div className="mx-auto max-w-4xl p-4 md:p-8">
+          <ProfileHeaderSkeleton />
         </div>
       </div>
     );

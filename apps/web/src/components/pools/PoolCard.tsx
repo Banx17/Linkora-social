@@ -94,19 +94,7 @@ function StatusBadge({ isEmpty }: { isEmpty: boolean }) {
   );
 }
 
-export function PoolCardSkeleton() {
-  return (
-    <div style={styles.skeleton} aria-hidden="true">
-      <div style={styles.skeletonHeader}>
-        <div style={{ ...styles.skeletonLine, width: "40%" }} />
-        <div style={{ ...styles.skeletonChip, width: "60px" }} />
-      </div>
-      <div style={{ ...styles.skeletonLine, width: "70%" }} />
-      <div style={{ ...styles.skeletonLine, width: "55%" }} />
-      <div style={{ ...styles.skeletonChip, width: "90px" }} />
-    </div>
-  );
-}
+export { PoolCardSkeleton } from "@/components/skeletons";
 
 const styles: Record<string, CSSProperties> = {
   link: {
@@ -243,36 +231,5 @@ const styles: Record<string, CSSProperties> = {
     color: "var(--color-primary)",
     fontWeight: 600,
     marginTop: "var(--space-1)",
-  },
-  // Skeleton
-  skeleton: {
-    background: "var(--color-surface-1)",
-    border: "1px solid var(--color-border)",
-    borderRadius: "var(--radius-xl)",
-    padding: "var(--space-6)",
-    display: "flex",
-    flexDirection: "column",
-    gap: "var(--space-4)",
-  },
-  skeletonHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  skeletonLine: {
-    height: "14px",
-    borderRadius: "9999px",
-    background:
-      "linear-gradient(90deg, var(--color-surface-1) 0%, var(--color-surface-2) 50%, var(--color-surface-1) 100%)",
-    backgroundSize: "200% 100%",
-    animation: "shimmer 1.5s infinite",
-  },
-  skeletonChip: {
-    height: "24px",
-    borderRadius: "9999px",
-    background:
-      "linear-gradient(90deg, var(--color-surface-1) 0%, var(--color-surface-2) 50%, var(--color-surface-1) 100%)",
-    backgroundSize: "200% 100%",
-    animation: "shimmer 1.5s infinite",
   },
 };

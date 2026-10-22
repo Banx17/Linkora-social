@@ -5,10 +5,10 @@ import { useRouter, useSearchParams } from "next/navigation";
 import {
   Post,
   PostCard,
-  PostCardSkeleton,
   getPostDate,
   getPostTipTotal,
 } from "@/components/PostCard";
+import { FeedSkeleton } from "@/components/skeletons";
 import { Profile, ProfileCard } from "@/components/ProfileCard";
 import SearchBar from "@/components/SearchBar";
 import { isAboveTheFold } from "@/lib/responsiveImage";
@@ -270,14 +270,8 @@ export function SearchPageClient() {
       )}
 
       {hasQuery && activeTab === "posts" && (
-        <div
-          className={resultsClassName}
-          aria-live="polite"
-          aria-busy={isPending || loading}
-          data-pending={isPending ? "true" : undefined}
-          data-testid="search-results"
-        >
-          {loading && Array.from({ length: 5 }, (_, index) => <PostCardSkeleton key={index} />)}
+        <div className="space-y-4" aria-live="polite">
+          {loading && <FeedSkeleton count={5} />}
           {!loading &&
             !error &&
             hasPostResults &&
