@@ -1671,10 +1671,7 @@ fn test_commit_post_publishes_event() {
     };
     let expected_xdr = expected.to_xdr(&env, &client.address);
     let events = env.events().all();
-    assert!(events
-        .events()
-        .iter()
-        .any(|event| *event == expected_xdr));
+    assert!(events.events().iter().any(|event| *event == expected_xdr));
 }
 
 #[test]
