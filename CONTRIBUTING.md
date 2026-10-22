@@ -7,6 +7,8 @@ Thank you for contributing to Linkora! This document covers everything you need 
 >
 > Please introduce yourself in Telegram before opening a PR to coordinate and avoid duplicate work.
 
+> 🚀 **New contributors:** Start with the **[Getting Started Guide](./docs/GETTING_STARTED.md)** for a complete walkthrough from clone to first PR.
+
 ---
 
 ## Prerequisites
