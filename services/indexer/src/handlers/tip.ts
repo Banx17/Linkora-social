@@ -5,6 +5,7 @@
 
 import { Pool, PoolClient } from "pg";
 import { PgClientLike } from "../pipeline";
+import { logger } from "../logger";
 
 export interface TipEvent {
   tipper: string;
@@ -64,7 +65,7 @@ export async function handleTip(
       await conn.query("COMMIT");
     } catch (error) {
       await conn.query("ROLLBACK");
-      console.error(`Error handling TipEvent for post ${event.post_id}:`, error);
+      logger.error({ postId: event.post_id.toString(), err: error }, "Error handling TipEvent");
       throw error;
     } finally {
       (conn as PoolClient).release();
@@ -92,7 +93,7 @@ async function _tipWrites(
   );
 
   if ((insertResult.rowCount ?? 0) === 0) {
-    console.log(`Tip already processed for tx ${txHash} (idempotent skip)`);
+    logger.debug({ txHash }, "Tip already processed (idempotent skip)");
     return;
   }
 
@@ -102,7 +103,7 @@ async function _tipWrites(
      WHERE id = $2 AND deleted_at IS NULL`,
     [amount.toString(), post_id.toString()]
   );
-  console.log(`Tip of ${amount} from ${tipper} added to post ${post_id}`);
+  logger.info({ tipper, postId: post_id.toString(), amount: amount.toString() }, "Tip added to post");
 }
 
 /**

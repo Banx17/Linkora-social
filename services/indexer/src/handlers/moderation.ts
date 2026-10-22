@@ -4,6 +4,7 @@
  */
 
 import { Database } from "../db";
+import { logger } from "../logger";
 
 export interface PostReportedEvent {
   post_id: bigint;
@@ -53,9 +54,9 @@ export async function handlePostReported(
       updated_at: now,
     });
 
-    console.log(`Post ${post_id} reported by ${reporter_address}: ${reason}`);
+    logger.info({ postId: post_id.toString(), reporterAddress: reporter_address, reason }, "Post reported");
   } catch (error) {
-    console.error(`Error handling PostReportedEvent for post ${post_id}:`, error);
+    logger.error({ postId: post_id.toString(), reporterAddress: reporter_address, err: error }, "Error handling PostReportedEvent");
     throw error;
   }
 }
@@ -81,11 +82,12 @@ export async function handleReportDismissed(
       moderator_notes
     );
 
-    console.log(
-      `Report for post ${post_id} by ${reporter_address} dismissed by ${moderator_address}`
+    logger.info(
+      { postId: post_id.toString(), reporterAddress: reporter_address, moderatorAddress: moderator_address },
+      "Report dismissed"
     );
   } catch (error) {
-    console.error(`Error handling ReportDismissedEvent for post ${post_id}:`, error);
+    logger.error({ postId: post_id.toString(), reporterAddress: reporter_address, err: error }, "Error handling ReportDismissedEvent");
     throw error;
   }
 }
@@ -121,9 +123,9 @@ export async function handlePostRemovedByModeration(
       );
     }
 
-    console.log(`Post ${post_id} removed by moderation (${moderator_address}): ${reason}`);
+    logger.info({ postId: post_id.toString(), moderatorAddress: moderator_address, reason }, "Post removed by moderation");
   } catch (error) {
-    console.error(`Error handling PostRemovedByModerationEvent for post ${post_id}:`, error);
+    logger.error({ postId: post_id.toString(), moderatorAddress: moderator_address, err: error }, "Error handling PostRemovedByModerationEvent");
     throw error;
   }
 }

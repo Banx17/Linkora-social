@@ -6,10 +6,35 @@ import { Request, Response, NextFunction } from "express";
 
 const isDev = process.env.NODE_ENV !== "production" && process.env.NODE_ENV !== "test";
 
+/**
+ * Singleton Pino logger for the indexer service (Issue #1757).
+ *
+ * - Structured JSON output with ISO timestamps in production/test.
+ * - pino-pretty transport in development for human-readable output.
+ * - Sensitive fields (Authorization headers, passwords, wallet private keys)
+ *   are redacted at all log levels via Pino's built-in redact option.
+ * - Every request is tagged with a `correlationId` (UUID v4) propagated
+ *   from the X-Correlation-ID request header (or generated if absent).
+ */
 const pinoLogger = pino({
   level: process.env.LOG_LEVEL || "info",
   base: { service: "indexer" },
   timestamp: pino.stdTimeFunctions.isoTime,
+  // Redact sensitive fields at all log levels so they never appear in logs.
+  redact: {
+    paths: [
+      "req.headers.authorization",
+      "req.headers.Authorization",
+      "*.password",
+      "*.privateKey",
+      "*.private_key",
+      "*.secret",
+      "*.walletKey",
+      "*.wallet_key",
+      "*.seed",
+    ],
+    censor: "[REDACTED]",
+  },
   ...(isDev && {
     transport: {
       target: "pino-pretty",
@@ -20,10 +45,19 @@ const pinoLogger = pino({
 
 export const logger = pinoLogger;
 
-// ── Request context with request ID ───────────────────────────────────────────
+// ── Request context with correlation ID ──────────────────────────────────────
+//
+// Every incoming request is tagged with a `correlationId` (UUID v4).
+// The value is taken from the X-Correlation-ID request header when provided
+// (so upstream services can propagate their own ID) or generated fresh.
+// It is echoed back in the X-Correlation-ID response header and included in
+// every log entry produced during the request so that all log lines for a
+// single request can be correlated in a log aggregator.
 
 interface RequestContext {
   requestId: string;
+  /** Alias for requestId — preferred name per issue #1757. */
+  correlationId: string;
   startTime: number;
   stellarAddress?: string;
   userId?: string;
@@ -98,25 +132,45 @@ export function recordAbuseAttempt(ipAddress: string): void {
 import { getClientIP } from "./middleware/rateLimit";
 
 // ── Request logging middleware ────────────────────────────────────────────────
+//
+// Attaches a correlationId to every request (issue #1757):
+//   - Reads X-Correlation-ID from the incoming request if present, otherwise
+//     generates a fresh UUID v4.
+//   - Stores it in req.context so it can be propagated through all service
+//     calls and included in every log entry.
+//   - Echoes it back in the X-Correlation-ID response header.
+//   - Logs request start (method, path, correlationId) and completion
+//     (method, path, status, latency, correlationId).
 
 export function requestLoggingMiddleware(req: Request, res: Response, next: NextFunction): void {
-  const requestId = uuidv4();
-  const startTime = Date.now();
+  // Honour a correlation ID sent by an upstream proxy/gateway, or mint a new one.
+  const incomingCorrelationId = req.headers["x-correlation-id"];
+  const correlationId =
+    typeof incomingCorrelationId === "string" && incomingCorrelationId.trim().length > 0
+      ? incomingCorrelationId.trim()
+      : uuidv4();
 
+  const startTime = Date.now();
   const ipAddress = getClientIP(req);
 
-  req.context = { requestId, startTime, ipAddress };
+  req.context = { requestId: correlationId, correlationId, startTime, ipAddress };
 
-  logger.info({ requestId, method: req.method, path: req.path, ipAddress }, "Incoming request");
+  // Echo the correlation ID so callers can match their own request.
+  res.setHeader("X-Correlation-ID", correlationId);
 
-  // Capture the response end to log completion
+  logger.info(
+    { correlationId, method: req.method, path: req.path, ipAddress },
+    "Incoming request"
+  );
+
+  // Capture the response end to log completion with latency.
   const originalSend = res.send;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   res.send = function (data: any) {
     const duration = Date.now() - startTime;
     const userId = req.context?.stellarAddress ?? req.context?.userId;
     const logData = {
-      requestId,
+      correlationId,
       method: req.method,
       path: req.path,
       statusCode: res.statusCode,
@@ -139,6 +193,32 @@ export function requestLoggingMiddleware(req: Request, res: Response, next: Next
   };
 
   next();
+}
+
+// ── Query duration logging helper ─────────────────────────────────────────────
+//
+// Wrap a database query so the elapsed time is logged at DEBUG level with the
+// correlationId of the request that triggered it (issue #1757).
+//
+// Usage:
+//   const rows = await loggedQuery(db, 'SELECT …', params, correlationId);
+
+export async function loggedQuery<T>(
+  queryFn: () => Promise<T>,
+  label: string,
+  correlationId?: string
+): Promise<T> {
+  const start = Date.now();
+  try {
+    const result = await queryFn();
+    const duration = Date.now() - start;
+    logger.debug({ correlationId, query: label, duration }, "Database query completed");
+    return result;
+  } catch (err) {
+    const duration = Date.now() - start;
+    logger.error({ correlationId, query: label, duration, err }, "Database query failed");
+    throw err;
+  }
 }
 
 // ── Health check state ────────────────────────────────────────────────────────

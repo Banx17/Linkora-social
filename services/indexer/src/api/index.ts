@@ -355,7 +355,7 @@ if (require.main === module) {
     : createApp(_stub);
 
   apiApp.listen(PORT, () => {
-    console.log(`Indexer API listening on port ${PORT}`);
-    console.log(`Rate limit enabled: read limit is 60 RPM, write limit is 10 RPM`);
+    logger.info({ port: PORT }, "Indexer API listening");
+    logger.info("Rate limit enabled: read limit is 60 RPM, write limit is 10 RPM");
   });
 }
