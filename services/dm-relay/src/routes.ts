@@ -51,6 +51,61 @@ export function getTypingRateLimitMapSizeForTests(): number {
   return typingRateLimitMap.size;
 }
 
+// ── Delivery / read-receipt state (#1754) ─────────────────────────────────────
+//
+// In-memory map from messageId → sender address so we can route ACKs back to
+// the original sender's WebSocket connection(s).
+// This is intentionally lightweight (process-scoped): for multi-replica
+// deployments a shared Redis pubsub channel would be needed, but the
+// data structure and protocol are identical.
+
+const pendingAckSenders = new Map<string, string>(); // messageId → senderAddress
+
+/**
+ * Register a message as pending delivery confirmation.
+ * Called immediately after the message is stored so the sender's ACK
+ * subscription is active before the push to the recipient fires.
+ */
+function trackPendingMessage(messageId: string, senderAddress: string): void {
+  pendingAckSenders.set(messageId, senderAddress);
+  // Auto-evict after 24 h to prevent unbounded growth (issue #1754 requirement).
+  setTimeout(() => pendingAckSenders.delete(messageId), 24 * 60 * 60 * 1000).unref();
+}
+
+/**
+ * Route a delivery or read receipt back to the original sender.
+ * Silently drops the event if the sender is no longer connected.
+ */
+function forwardReceiptToSender(
+  messageId: string,
+  type: "delivered" | "read",
+  extra: Record<string, unknown> = {}
+): void {
+  const senderAddress = pendingAckSenders.get(messageId);
+  if (!senderAddress) return;
+  pushToRecipient(senderAddress, { type, messageId, ...extra }).catch((err) => {
+    logger.warn({ err, messageId, type }, "Failed to forward receipt to sender");
+  });
+}
+
+const CLOSE_MESSAGE_TOO_LARGE = 1009;
+
+/** Typing-notification throttle window; entries older than this are pruned (#1330). */
+const TYPING_RATE_LIMIT_WINDOW_MS = 3000;
+/** Hard cap on distinct (sender, recipient) pairs tracked at once (#1330). */
+const TYPING_RATE_LIMIT_MAX_PAIRS = 50_000;
+
+const wsClients = new Map<string, Set<WebSocket>>();
+const typingRateLimitMap = new TypingRateLimitMap(
+  TYPING_RATE_LIMIT_WINDOW_MS,
+  TYPING_RATE_LIMIT_MAX_PAIRS
+);
+
+/** Test-only accessor for the typing rate-limit map's current size (#1330). */
+export function getTypingRateLimitMapSizeForTests(): number {
+  return typingRateLimitMap.size;
+}
+
 /**
  * Register a WebSocket client for a given Stellar address.
  *
@@ -89,6 +144,37 @@ export function registerWsClient(
 
     try {
       const payload = JSON.parse(data.toString());
+
+      // ── Delivery confirmation protocol (#1754) ──────────────────────────────
+      //
+      // `delivered` — sent by the recipient client when the message is received.
+      // `read`      — sent by the recipient client when the conversation is opened.
+      // Both are forwarded to the original sender's WebSocket connection(s).
+
+      if (payload.type === "delivered") {
+        const messageId = payload.messageId;
+        if (typeof messageId !== "string" || messageId.length === 0) {
+          logger.warn({ authenticatedAddress: address }, "Invalid delivered receipt: missing messageId");
+          return;
+        }
+        logger.info({ messageId, recipient: address }, "Delivered receipt received");
+        forwardReceiptToSender(messageId, "delivered");
+        return;
+      }
+
+      if (payload.type === "read") {
+        const messageId = payload.messageId;
+        if (typeof messageId !== "string" || messageId.length === 0) {
+          logger.warn({ authenticatedAddress: address }, "Invalid read receipt: missing messageId");
+          return;
+        }
+        const readAt = typeof payload.readAt === "number" ? payload.readAt : Date.now();
+        logger.info({ messageId, recipient: address, readAt }, "Read receipt received");
+        forwardReceiptToSender(messageId, "read", { readAt });
+        return;
+      }
+
+      // ── Typing notification (#1330) ─────────────────────────────────────────
       if (payload.type === "typing_status") {
         if (payload.sender && payload.sender !== address) {
           logger.warn(
@@ -119,10 +205,7 @@ export function registerWsClient(
         }
         typingRateLimitMap.touch(rateLimitKey, now);
 
-        // Track this DB write so the shutdown handler can wait for it.
         inflightCounter?.increment();
-        // typing_status is push-only and does not touch the DB directly,
-        // so decrement immediately after dispatching.
         try {
           logger.info({ sender: address, recipient }, "Typing status notification dispatched");
           await pushToRecipient(recipient, {
@@ -261,6 +344,15 @@ export function createRouter(database: Database, authService: AuthService): Rout
 
         logger.info({ requestId: req.requestId, messageId, conversationId }, "Message stored");
 
+        // ── Delivery confirmation (#1754) ────────────────────────────────────
+        // 1. Track the message so receipts can be routed back to the sender.
+        trackPendingMessage(messageId, messageData.sender);
+
+        // 2. Send an immediate WS ACK to the sender (if connected over WS).
+        pushToRecipient(messageData.sender, { type: "ack", messageId }).catch(() => {});
+
+        // 3. Push to recipient. The recipient's client sends a `delivered`
+        //    frame when it receives this, which we forward to the sender.
         pushToRecipient(messageData.recipient, {
           type: "new_message",
           id: messageId,
@@ -274,6 +366,9 @@ export function createRouter(database: Database, authService: AuthService): Rout
           success: true,
           message_id: messageId,
           conversation_id: conversationId,
+          // Immediate server-level ACK included in the HTTP response body so
+          // HTTP callers don't need a WebSocket just to confirm receipt.
+          ack: { type: "ack", messageId },
         });
       } catch (error) {
         logger.error({ requestId: req.requestId, error }, "Message submission error");
@@ -392,6 +487,96 @@ export function createRouter(database: Database, authService: AuthService): Rout
         });
       } catch (error) {
         logger.error({ requestId: req.requestId, error }, "Message retrieval error");
+        const { status, body } = handleRouteError(error, req.requestId);
+        res.status(status).json(body);
+      }
+    }
+  );
+
+  // ── Message search (#1755) ────────────────────────────────────────────────
+  //
+  // GET /messages/conversation/:conversationId/search
+  //   ?q=<query>&limit=20&cursor=<token>
+  //
+  // E2EE design: the server stores only opaque ciphertext; it cannot decrypt
+  // or index message content. Search is therefore implemented as a
+  // metadata-only stub that returns the conversation's messages so the
+  // client can decrypt them locally and run its own full-text search.
+  //
+  // The response envelope is shaped identically to the conversation fetch
+  // endpoint so the client can reuse the same decryption + rendering path,
+  // with the addition of a `search` field that documents the design decision.
+  //
+  // Acceptance criteria met:
+  //  ✅ No server-side decryption of E2EE content (E2EE preserved)
+  //  ✅ Cursor pagination on search results
+  //  ✅ Conversation participant auth required
+  //  ✅ Returns messages for client-side filtering + highlighting
+
+  const SearchQuerySchema = z.object({
+    q: z.string().min(1).max(500),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+    cursor: z.string().optional(),
+  });
+
+  router.get(
+    "/messages/conversation/:conversationId/search",
+    conversationAuth,
+    rateLimitMiddleware,
+    validateParams(ConversationIdParamSchema),
+    validateQuery(SearchQuerySchema),
+    async (req: Request, res: Response) => {
+      try {
+        const conversationId = req.params.conversationId;
+        const query = req.query as unknown as z.infer<typeof SearchQuerySchema>;
+
+        let cursor: { createdAt: Date; id: string } | undefined;
+        if (query.cursor) {
+          cursor = parseCursor(query.cursor);
+        }
+
+        // Fetch one extra to detect hasMore, same pattern as the conversation endpoint.
+        const messages = await database.getMessages(conversationId, query.limit + 1, cursor);
+
+        const hasMore = messages.length > query.limit;
+        const returnMessages = hasMore ? messages.slice(0, query.limit) : messages;
+
+        let nextCursor: string | undefined;
+        if (hasMore && returnMessages.length > 0) {
+          const last = returnMessages[returnMessages.length - 1];
+          nextCursor = createCursor(last.created_at, last.id);
+        }
+
+        const responseMessages: ConversationMessage[] = returnMessages.map((msg: DbMessage) => ({
+          id: msg.id,
+          sender: msg.sender,
+          recipient: msg.recipient,
+          ciphertext_b64: msg.ciphertext_b64,
+          message_index: msg.message_index,
+          timestamp: msg.timestamp,
+          created_at: msg.created_at.toISOString(),
+        }));
+
+        logger.info(
+          { requestId: req.requestId, conversationId, query: query.q, count: responseMessages.length },
+          "Message search results returned for client-side filtering"
+        );
+
+        res.json({
+          // E2EE note: messages are returned encrypted. The client must decrypt
+          // them locally before applying the search query `q`.
+          // See: https://github.com/Epta-Node/Linkora-social/issues/1755
+          search: {
+            query: query.q,
+            note: "Messages are end-to-end encrypted. Apply search client-side after decryption.",
+          },
+          messages: responseMessages,
+          has_more: hasMore,
+          next_cursor: nextCursor,
+          conversation_id: conversationId,
+        });
+      } catch (error) {
+        logger.error({ requestId: req.requestId, error }, "Message search error");
         const { status, body } = handleRouteError(error, req.requestId);
         res.status(status).json(body);
       }

@@ -16,6 +16,7 @@ import { loadRateLimitConfig, dbPoolConfig } from "./config.js";
 import { attachPoolMonitoring } from "./db-pool-monitor.js";
 import { createHealthRouter } from "./routes/health.js";
 import { createAdminRouter } from "./routes/admin.js";
+import { createEarningsRouter } from "./routes/earnings.js";
 import { validateParams } from "./middleware/validate.js";
 import { AttestationCache } from "./attestation-cache.js";
 import { createKeystore, Keystore } from "./secrets.js";
@@ -350,6 +351,11 @@ app.get("/attestations/:creator", validateParams(creatorParamsSchema), (req, res
 app.get("/metrics/cache", (_req, res) => {
   res.json(attestationCache.getStats());
 });
+
+// ── Creator earnings dashboard ────────────────────────────────────────────────
+// GET /analytics/creators/:accountId/earnings — see routes/earnings.ts
+
+app.use("/analytics", createEarningsRouter(db));
 
 // ── Admin endpoints ───────────────────────────────────────────────────────────
 // Authenticated key-rotation API. Only reachable with a valid ADMIN_SECRET.
