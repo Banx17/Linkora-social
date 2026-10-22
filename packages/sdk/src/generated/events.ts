@@ -81,6 +81,31 @@ export interface LikePostEvent {
 }
 
 /**
+ * Contract event: `PostRevealedEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
+export interface PostRevealedEvent {
+  version: number;
+  post_id: bigint;
+  author: string;
+  content_hash: Uint8Array;
+}
+
+/**
+ * Contract event: `PostCommittedEvent`.
+ * Emitted by the Linkora contract — see
+ * packages/contracts/contracts/linkora-contracts/src/lib.rs.
+ */
+export interface PostCommittedEvent {
+  version: number;
+  post_id: bigint;
+  author: string;
+  content_hash: Uint8Array;
+  reveal_time: bigint;
+}
+
+/**
  * Contract event: `UnfollowEvent`.
  * Emitted by the Linkora contract — see
  * packages/contracts/contracts/linkora-contracts/src/lib.rs.
@@ -345,6 +370,8 @@ export type RawLinkoraEvent =
   | ({ type: "GovProposalCreatedEvent" } & GovProposalCreatedEvent)
   | ({ type: "GovProposalExecutedEvent" } & GovProposalExecutedEvent)
   | ({ type: "PoolThresholdUpdatedEvent" } & PoolThresholdUpdatedEvent)
+  | ({ type: "PostCommittedEvent" } & PostCommittedEvent)
+  | ({ type: "PostRevealedEvent" } & PostRevealedEvent)
   | { type: "unknown"; raw: xdr.ScVal };
 
 /** @deprecated Use `RawLinkoraEvent` instead. The name `LinkoraEvent` now refers to the canonical hand-written type in `events/types.ts`. */
@@ -550,6 +577,23 @@ export function parseRawContractEvent(event: rpc.Api.EventResponse): RawLinkoraE
         pool_id: scValToNative(event.topic[1]),
         old_threshold: scValToNative(event.topic[2]),
         new_threshold: scValToNative(event.topic[3]),
+      };
+    case "PostCommittedEvent":
+      return {
+        type: "PostCommittedEvent",
+        version: scValToNative(event.topic[1]),
+        post_id: scValToNative(event.topic[2]),
+        author: scValToNative(event.topic[3]),
+        content_hash: scValToNative(event.value),
+        reveal_time: (scValToNative(event.value) as any)?.reveal_time,
+      };
+    case "PostRevealedEvent":
+      return {
+        type: "PostRevealedEvent",
+        version: scValToNative(event.topic[1]),
+        post_id: scValToNative(event.topic[2]),
+        author: scValToNative(event.topic[3]),
+        content_hash: scValToNative(event.value),
       };
     default:
       return { type: "unknown", raw: event.value };

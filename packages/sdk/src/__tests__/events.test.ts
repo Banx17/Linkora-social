@@ -217,6 +217,44 @@ describe("parseContractEvent", () => {
     expect(evt.min_out_amount).toBe(450n);
   });
 
+  it("decodes PostCommittedEvent", () => {
+    const raw = rawEvent({
+      topics: [enc("post_committed")],
+      data: enc({
+        version: 1,
+        post_id: 7,
+        author: "GAUTHOR",
+        content_hash: "aabbcc",
+        reveal_time: 1700000000,
+      }),
+    });
+    const evt = parseContractEvent(raw) as Extract<LinkoraEvent, { type: "post_committed" }>;
+    expect(evt).not.toBeNull();
+    expect(evt.type).toBe("post_committed");
+    expect(evt.post_id).toBe(7n);
+    expect(evt.author).toBe("GAUTHOR");
+    expect(evt.content_hash).toBe("aabbcc");
+    expect(evt.reveal_time).toBe(1700000000n);
+  });
+
+  it("decodes PostRevealedEvent", () => {
+    const raw = rawEvent({
+      topics: [enc("post_revealed")],
+      data: enc({
+        version: 1,
+        post_id: 7,
+        author: "GAUTHOR",
+        content_hash: "aabbcc",
+      }),
+    });
+    const evt = parseContractEvent(raw) as Extract<LinkoraEvent, { type: "post_revealed" }>;
+    expect(evt).not.toBeNull();
+    expect(evt.type).toBe("post_revealed");
+    expect(evt.post_id).toBe(7n);
+    expect(evt.author).toBe("GAUTHOR");
+    expect(evt.content_hash).toBe("aabbcc");
+  });
+
   it("decodes GovProposalCreatedEvent", () => {
     const raw = rawEvent({
       topics: [enc("gov_proposal_created")],

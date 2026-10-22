@@ -1419,6 +1419,54 @@ export class LinkoraClient extends GeneratedLinkoraClient {
   }
 
   /**
+   * Build a submittable commit_post transaction.
+   */
+  async prepareCommitPostTx(
+    author: string,
+    contentHash: Uint8Array,
+    revealTime: number | bigint,
+    horizonUrl?: string
+  ): Promise<string> {
+    ensureAddress(author, "author");
+    if (contentHash.length !== 32) {
+      throw new Error("contentHash must be 32 bytes");
+    }
+    ensurePositiveInteger(revealTime, "revealTime");
+    const sourceAccount = await this.getAccountForTx(author, horizonUrl);
+    const tx = await this.prepareTransaction(
+      "commit_post",
+      sourceAccount,
+      scvAddress(author),
+      nativeToScVal(new Uint8Array(contentHash), { type: "bytes" }),
+      scvU64(BigInt(revealTime))
+    );
+    return tx.toEnvelope().toXDR("base64");
+  }
+
+  /**
+   * Build a submittable reveal_post transaction.
+   */
+  async prepareRevealPostTx(
+    author: string,
+    postId: number | bigint,
+    content: string,
+    horizonUrl?: string
+  ): Promise<string> {
+    ensureAddress(author, "author");
+    ensurePositiveInteger(postId, "postId");
+    ensureNonEmptyString(content, "content");
+    const sourceAccount = await this.getAccountForTx(author, horizonUrl);
+    const tx = await this.prepareTransaction(
+      "reveal_post",
+      sourceAccount,
+      scvAddress(author),
+      scvU64(BigInt(postId)),
+      scvString(content)
+    );
+    return tx.toEnvelope().toXDR("base64");
+  }
+
+  /**
    * Create a new post.
    *
    * @param author The Stellar public key of the author.
