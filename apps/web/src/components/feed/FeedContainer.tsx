@@ -3,7 +3,8 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { usePosts } from "@/hooks/usePosts";
 import { CreatePostModal } from "../modals/CreatePostModal";
-import { PostCard, PostCardSkeleton } from "../PostCard";
+import { PostCard } from "../PostCard";
+import { FeedSkeleton } from "../skeletons";
 import { Plus } from "lucide-react";
 import { useFeatureFlag } from "@/lib/featureFlags";
 
@@ -110,12 +111,8 @@ export function FeedContainer({ authorAddress }: FeedContainerProps) {
 
       {/* Feed list */}
       {loading ? (
-        <div className="space-y-4">
-          <PostCardSkeleton />
-          <PostCardSkeleton />
-          <PostCardSkeleton />
-        </div>
-      ) : visiblePosts.length === 0 ? (
+        <FeedSkeleton />
+      ) : posts.length === 0 ? (
         <div className="text-center py-12 border border-dashed border-[var(--border)] rounded-xl">
           <p className="text-gray-500 font-medium">No posts found</p>
           <p className="text-xs text-gray-400 mt-1">Be the first one to create a post!</p>

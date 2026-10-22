@@ -6,10 +6,10 @@ import { useRouter, useSearchParams } from "next/navigation";
 import {
   Post,
   PostCard,
-  PostCardSkeleton,
   getPostDate,
   getPostTipTotal,
 } from "@/components/PostCard";
+import { FeedSkeleton, PoolCardSkeleton } from "@/components/skeletons";
 import { Profile, ProfileCard } from "@/components/ProfileCard";
 import SearchBar from "@/components/SearchBar";
 import { isAboveTheFold } from "@/lib/responsiveImage";
@@ -17,6 +17,7 @@ import { isAboveTheFold } from "@/lib/responsiveImage";
 // Results sit in the max-w-5xl (1024px) container minus page padding.
 const SEARCH_POST_IMAGE_SIZES = "(min-width: 1024px) 992px, 100vw";
 const SEARCH_DEBOUNCE_MS = 300;
+const INDEXER_API_URL = process.env.NEXT_PUBLIC_INDEXER_API_URL ?? "";
 
 /** Stellar amounts carry 7 decimal places. */
 const TOKENS_PER_UNIT = BigInt(10_000_000);
@@ -342,27 +343,6 @@ function PoolResultCard({ pool }: { pool: PoolResult }) {
   );
 }
 
-function PoolResultSkeleton() {
-  return (
-    <div
-      aria-hidden="true"
-      className="animate-pulse rounded-lg border border-[var(--border)] bg-[var(--card)] p-5"
-    >
-      <div className="flex items-start justify-between gap-4">
-        <div className="space-y-3">
-          <div className="h-5 w-40 rounded bg-[var(--muted)]" />
-          <div className="h-3 w-56 rounded bg-[var(--muted)]" />
-        </div>
-        <div className="h-6 w-16 rounded-full bg-[var(--muted)]" />
-      </div>
-      <div className="mt-5 flex justify-between gap-4">
-        <div className="h-4 w-32 rounded bg-[var(--muted)]" />
-        <div className="h-4 w-36 rounded bg-[var(--muted)]" />
-      </div>
-    </div>
-  );
-}
-
 export function SearchPageClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -463,12 +443,17 @@ export function SearchPageClient() {
     setLoading(true);
     setError(null);
 
-    fetch(`${path}?q=${encodeURIComponent(trimmed)}`, { signal: controller.signal })
+    fetch(`${INDEXER_API_URL}${path}?q=${encodeURIComponent(trimmed)}`, {
+      signal: controller.signal,
+    })
       .then((res) => {
         if (!res.ok) throw new Error("Search request failed.");
         return res.json();
       })
       .then((data) => {
+        if (controller.signal.aborted) return;
+        // Results and the end of loading land in the same transition so the
+        // list never flashes an empty state between the two updates.
         startTransition(() => {
           setPosts(readPosts(data));
           setProfiles(readProfiles(data));
@@ -477,7 +462,8 @@ export function SearchPageClient() {
         });
       })
       .catch((err: unknown) => {
-        if (err instanceof Error && err.name === "AbortError") return;
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        if (controller.signal.aborted) return;
         setError(err instanceof Error ? err.message : "Search request failed.");
         setPosts([]);
         setProfiles([]);
@@ -874,15 +860,7 @@ export function SearchPageClient() {
           data-pending={isPending ? "true" : undefined}
           className={resultsClassName}
         >
-          {loading && (
-            <>
-              <PostCardSkeleton />
-              <PostCardSkeleton />
-              <PostCardSkeleton />
-              <PostCardSkeleton />
-              <PostCardSkeleton />
-            </>
-          )}
+          {loading && <FeedSkeleton count={5} />}
           {!loading && !error && hasPostResults && (
             <p className="text-xs text-[var(--text-muted)]">
               {visiblePosts.length} {visiblePosts.length === 1 ? "result" : "results"}
@@ -942,8 +920,8 @@ export function SearchPageClient() {
         >
           {loading && (
             <>
-              <PoolResultSkeleton />
-              <PoolResultSkeleton />
+              <PoolCardSkeleton />
+              <PoolCardSkeleton />
             </>
           )}
           {!loading && !error && hasPoolResults && (
