@@ -134,6 +134,12 @@ export const OptimisticStore = {
     return true;
   },
 
+  // Drop the rollback snapshot after the transaction is confirmed. The
+  // optimistic state stays in place because it now matches the chain.
+  commitFollowState(key: string) {
+    followSnapshots.delete(key);
+  },
+
   setLikeState(key: string, state: LikeState) {
     likeStateMap.set(key, state);
     notify();
@@ -167,6 +173,11 @@ export const OptimisticStore = {
     likeSnapshots.delete(key);
     emitRolledBack({ kind: "like", key });
     return true;
+  },
+
+  // Drop the rollback snapshot after the like is confirmed on-chain.
+  commitLikeState(key: string) {
+    likeSnapshots.delete(key);
   },
 
   setTipState(key: string, state: TipState) {
@@ -288,7 +299,7 @@ export function useOptimisticFollow(
  */
 export function useOptimisticLike(
   user: string | null,
-  postId: string | bigint,
+  postId: string | bigint | number,
   initialState: LikeState
 ): LikeState {
   const key = `${user}:${postId}`;

@@ -1,5 +1,5 @@
 import Script from "next/script";
-import { GoogleAnalytics } from "@next/third-party/google";
+import { GoogleAnalytics } from "@next/third-parties/google";
 import { Analytics as VercelAnalytics } from "@vercel/analytics/react";
 
 /**
@@ -92,9 +92,7 @@ export function ThirdPartyScripts() {
       <VercelAnalytics />
 
       {/* Legacy custom analytics endpoint (optional) */}
-      {ANALYTICS_SCRIPT_URL && (
-        <Script src={ANALYTICS_SCRIPT_URL} strategy="afterInteractive" />
-      )}
+      {ANALYTICS_SCRIPT_URL && <Script src={ANALYTICS_SCRIPT_URL} strategy="afterInteractive" />}
 
       {/* IPFS pinning / vitals beacon — idle time only */}
       {IPFS_SCRIPT_URL && <Script src={IPFS_SCRIPT_URL} strategy="lazyOnload" />}

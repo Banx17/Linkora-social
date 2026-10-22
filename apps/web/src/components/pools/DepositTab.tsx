@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useRef, type CSSProperties } from "react";
 import type { PoolData, TokenMeta } from "@/hooks/usePools";
 import { formatTokenAmount, parseTokenAmount } from "@/hooks/usePools";
-import { useDeposit } from "@/hooks/usePoolContract";
+import { usePoolDepositMutation } from "@/hooks/usePoolDepositMutation";
 import { TxStatusBanner } from "./TxStatusBanner";
 import { PoolTxConfirmDialog } from "./PoolTxConfirmDialog";
 import { trackPoolJoined } from "@/lib/gtag";
@@ -28,7 +28,8 @@ export function DepositTab({
   const [amount, setAmount] = useState("");
   const [amountError, setAmountError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const { status, result, error, deposit, reset } = useDeposit();
+  const { status, result, error, deposit, reset, isPending, pendingDeposit } =
+    usePoolDepositMutation({ poolId: pool.pool_id });
 
   // Capture the pending deposit amount so the success effect can read it.
   const pendingAmount = useRef<string>("");
@@ -48,6 +49,16 @@ export function DepositTab({
   const decimals = tokenMeta?.decimals ?? 7;
   const symbol = tokenMeta?.symbol ?? "TOKEN";
   const isSubmitting = status !== "idle" && status !== "error" && status !== "success";
+
+  // Optimistically show the new balance while the deposit confirms on-chain.
+  const optimisticBalance = (() => {
+    if (!pendingDeposit || !pendingDeposit.amount) return pool.balance;
+    try {
+      return pool.balance + parseTokenAmount(pendingDeposit.amount, decimals);
+    } catch {
+      return pool.balance;
+    }
+  })();
 
   const validateAmount = useCallback(
     (val: string): string | null => {
@@ -89,7 +100,14 @@ export function DepositTab({
   const handleConfirm = useCallback(async () => {
     setConfirmOpen(false);
     pendingAmount.current = amount;
-    await deposit(currentUser, pool.pool_id, pool.token, amount, decimals, contractAddress);
+    await deposit({
+      depositor: currentUser,
+      poolId: pool.pool_id,
+      token: pool.token,
+      amountRaw: amount,
+      decimals,
+      contractAddress,
+    });
   }, [amount, deposit, currentUser, pool, decimals, contractAddress]);
 
   const handleReset = () => {
@@ -164,7 +182,18 @@ export function DepositTab({
           <div style={styles.infoRow}>
             <span style={styles.infoLabel}>Pool balance</span>
             <span style={styles.infoValue}>
-              {formatTokenAmount(pool.balance, decimals)} {symbol}
+              {formatTokenAmount(optimisticBalance, decimals)} {symbol}
+              {isPending && pendingDeposit && (
+                <span
+                  role="status"
+                  data-testid="pool-deposit-pending-badge"
+                  style={styles.pendingBadge}
+                  aria-label={`Deposit of ${pendingDeposit.amount} ${symbol} pending confirmation`}
+                >
+                  <span style={styles.pendingDot} aria-hidden="true" />
+                  Pending
+                </span>
+              )}
             </span>
           </div>
 
@@ -301,6 +330,27 @@ const styles: Record<string, CSSProperties> = {
     borderRadius: "var(--radius-sm)",
     fontSize: "0.75rem",
     fontWeight: 700,
+  },
+  pendingBadge: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "0.35rem",
+    marginLeft: "var(--space-2)",
+    padding: "0.1rem 0.45rem",
+    borderRadius: "999px",
+    border: "1px solid var(--color-warning, #d97706)",
+    background: "color-mix(in srgb, var(--color-warning, #d97706) 12%, transparent)",
+    color: "var(--color-warning, #b45309)",
+    fontSize: "0.7rem",
+    fontWeight: 700,
+    letterSpacing: "0.02em",
+  },
+  pendingDot: {
+    width: "0.4rem",
+    height: "0.4rem",
+    borderRadius: "999px",
+    background: "currentColor",
+    animation: "pulse 1.4s ease-in-out infinite",
   },
   addrMono: {
     fontFamily: "var(--font-mono)",
