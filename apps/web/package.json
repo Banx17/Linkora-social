@@ -63,6 +63,7 @@
     "tailwindcss": "^4",
     "ts-jest": "^29.1.1",
     "typescript": "^5",
+    "undici": "^6.21.0",
     "wait-on": "^9.1.0"
   }
 }
