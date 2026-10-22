@@ -189,7 +189,7 @@ the transaction. Bind the result to a `string` to see the intended type.
 | `publishDmKey(user: string, x25519PubKey: Uint8Array)` | `const xdr: string = client.publishDmKey("G...", new Uint8Array(32));` |
 | `createPool(admin: string, poolId: string, token: string, initialAdmins: string[], threshold: number \| bigint)` | `const xdr: string = client.createPool("G...", "community", "C...", ["G..."], 1);` |
 | `poolDeposit(depositor: string, poolId: string, token: string, amount: number \| bigint)` | `const xdr: string = client.poolDeposit("G...", "community", "C...", 100n);` |
-| `poolWithdraw(signers: string[], poolId: string, amount: number \| bigint, recipient: string)` | `const xdr: string = client.poolWithdraw(["G..."], "community", 100n, "G...");` |
+| `poolWithdraw(signers: string[], poolId: string, amount: number \| bigint, recipient: string, options?: { minOut?: number \| bigint; deadline?: number \| bigint })` | `const xdr: string = client.poolWithdraw(["G..."], "community", 100n, "G...", { minOut: 95n, deadline: 1700000000 });` |
 | `addPoolAdmin(signers: string[], poolId: string, newAdmin: string)` | `const xdr: string = client.addPoolAdmin(["G..."], "community", "G...");` |
 | `removePoolAdmin(signers: string[], poolId: string, admin: string)` | `const xdr: string = client.removePoolAdmin(["G..."], "community", "G...");` |
 | `updatePoolThreshold(signers: string[], poolId: string, threshold: number \| bigint)` | `const xdr: string = client.updatePoolThreshold(["G..."], "community", 2);` |

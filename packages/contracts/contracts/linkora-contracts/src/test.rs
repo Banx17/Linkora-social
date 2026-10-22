@@ -6,6 +6,7 @@ use super::*;
 use alloc::string::String as StdString;
 use ed25519_dalek::{Signer, SigningKey};
 use soroban_sdk::{
+    events::Event as _,
     symbol_short,
     testutils::{storage::Persistent as _, Address as _, Events, Ledger},
     token::{Client as TokenClient, StellarAssetClient},
@@ -1185,6 +1186,8 @@ fn test_pool_authorization() {
         &pool_id,
         &50,
         &other_user,
+        &None,
+        &None,
     );
     assert_eq!(client.get_pool(&pool_id).unwrap().balance, 50);
 }
@@ -1266,7 +1269,14 @@ fn test_pool_withdraw_insufficient_signers() {
     client.pool_deposit(&other_user, &pool_id, &token, &100);
 
     // Only 1 signer when 2 required
-    client.pool_withdraw(&vec![&env, pool_admin1.clone()], &pool_id, &50, &other_user);
+    client.pool_withdraw(
+        &vec![&env, pool_admin1.clone()],
+        &pool_id,
+        &50,
+        &other_user,
+        &None,
+        &None,
+    );
 }
 
 #[test]
@@ -1299,6 +1309,8 @@ fn test_pool_withdraw_unauthorized_signer() {
         &pool_id,
         &50,
         &other_user,
+        &None,
+        &None,
     );
 }
 
@@ -1331,6 +1343,8 @@ fn test_pool_withdraw_exceeds_balance() {
         &pool_id,
         &200,
         &other_user,
+        &None,
+        &None,
     );
 }
 
@@ -3165,7 +3179,7 @@ fn test_pool_withdraw_exactly_threshold_2_of_3_succeeds() {
 
     // Sign with exactly 2 of the 3 admins.
     let signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
-    client.pool_withdraw(&signers, &pool_id, &100, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &100, &recipient, &None, &None);
 
     assert_eq!(client.get_pool(&pool_id).unwrap().balance, 200);
     // Recipient must have received the tokens.
@@ -3183,7 +3197,7 @@ fn test_pool_withdraw_rejects_duplicate_signers_for_threshold() {
     let signer = admins.get(0).unwrap();
     let duplicate_signers = vec![&env, signer.clone(), signer];
 
-    client.pool_withdraw(&duplicate_signers, &pool_id, &50, &recipient);
+    client.pool_withdraw(&duplicate_signers, &pool_id, &50, &recipient, &None, &None);
 }
 
 #[test]
@@ -3196,7 +3210,7 @@ fn test_pool_withdraw_superset_of_threshold_also_succeeds() {
     let recipient = Address::generate(&env);
 
     // All 5 admins sign, threshold is only 3.
-    client.pool_withdraw(&admins, &pool_id, &200, &recipient);
+    client.pool_withdraw(&admins, &pool_id, &200, &recipient, &None, &None);
 
     assert_eq!(client.get_pool(&pool_id).unwrap().balance, 300);
     assert_eq!(TokenClient::new(&env, &token).balance(&recipient), 200);
@@ -3216,7 +3230,7 @@ fn test_pool_withdraw_3_of_5_threshold_succeeds() {
         admins.get(2).unwrap(),
         admins.get(4).unwrap(),
     ];
-    client.pool_withdraw(&signers, &pool_id, &150, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &150, &recipient, &None, &None);
 
     assert_eq!(client.get_pool(&pool_id).unwrap().balance, 450);
     assert_eq!(TokenClient::new(&env, &token).balance(&recipient), 150);
@@ -3233,13 +3247,13 @@ fn test_pool_withdraw_sequential_withdrawals_maintain_balance() {
 
     let signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
 
-    client.pool_withdraw(&signers, &pool_id, &300, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &300, &recipient, &None, &None);
     assert_eq!(client.get_pool(&pool_id).unwrap().balance, 700);
 
-    client.pool_withdraw(&signers, &pool_id, &200, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &200, &recipient, &None, &None);
     assert_eq!(client.get_pool(&pool_id).unwrap().balance, 500);
 
-    client.pool_withdraw(&signers, &pool_id, &500, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &500, &recipient, &None, &None);
     assert_eq!(client.get_pool(&pool_id).unwrap().balance, 0);
 
     assert_eq!(TokenClient::new(&env, &token).balance(&recipient), 1000);
@@ -3255,7 +3269,7 @@ fn test_pool_withdraw_exact_full_balance_succeeds() {
     let recipient = Address::generate(&env);
 
     let signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
-    client.pool_withdraw(&signers, &pool_id, &250, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &250, &recipient, &None, &None);
 
     assert_eq!(client.get_pool(&pool_id).unwrap().balance, 0);
     assert_eq!(TokenClient::new(&env, &token).balance(&recipient), 250);
@@ -3270,7 +3284,7 @@ fn test_pool_withdraw_event_emitted() {
     let recipient = Address::generate(&env);
 
     let signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
-    client.pool_withdraw(&signers, &pool_id, &100, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &100, &recipient, &None, &None);
 
     let all_events = env.events().all();
     // At least one event must have been emitted after the withdrawal.
@@ -3278,6 +3292,102 @@ fn test_pool_withdraw_event_emitted() {
         !all_events.events().is_empty(),
         "withdrawal must emit at least one event"
     );
+}
+
+#[test]
+fn test_pool_withdraw_meeting_min_out_succeeds() {
+    // A withdrawal whose received amount meets `min_out_amount` goes through.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _, pool_id, token, admins) = setup_pool(&env, 2, 2, 400);
+    let recipient = Address::generate(&env);
+
+    let signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
+    client.pool_withdraw(&signers, &pool_id, &100, &recipient, &Some(100), &None);
+
+    assert_eq!(client.get_pool(&pool_id).unwrap().balance, 300);
+    assert_eq!(TokenClient::new(&env, &token).balance(&recipient), 100);
+}
+
+#[test]
+#[should_panic(expected = "slippage exceeded")]
+fn test_pool_withdraw_below_min_out_reverts() {
+    // The received amount (100) is below `min_out_amount` (200): revert.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _, pool_id, _, admins) = setup_pool(&env, 2, 2, 400);
+    let recipient = Address::generate(&env);
+
+    let signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
+    client.pool_withdraw(&signers, &pool_id, &100, &recipient, &Some(200), &None);
+}
+
+#[test]
+fn test_pool_withdraw_slippage_publishes_event() {
+    // The slippage event is published on the failure path. The invocation
+    // reverts, so the event is rolled back with the failed call and is only
+    // observable through the host event buffer (never in committed events).
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _, pool_id, _, admins) = setup_pool(&env, 2, 2, 400);
+    let recipient = Address::generate(&env);
+
+    let signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
+    let res = client.try_pool_withdraw(&signers, &pool_id, &100, &recipient, &Some(200), &None);
+    assert!(res.is_err(), "withdrawal below min_out_amount must fail");
+
+    let expected = WithdrawalSlippageExceededEvent {
+        version: EVENT_VERSION,
+        pool_id: pool_id.clone(),
+        requested_amount: 100,
+        received_amount: 100,
+        min_out_amount: 200,
+    };
+    let expected_xdr = expected.to_xdr(&env, &client.address);
+
+    let events = env.host().get_events().unwrap();
+    assert!(
+        events
+            .0
+            .iter()
+            .any(|e| e.failed_call && e.event == expected_xdr),
+        "withdrawal_slippage_exceeded event must be published by the failing withdrawal"
+    );
+}
+
+#[test]
+#[should_panic(expected = "deadline expired")]
+fn test_pool_withdraw_after_deadline_reverts() {
+    // The ledger timestamp is past the caller-supplied deadline: revert.
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(100);
+
+    let (client, _, pool_id, _, admins) = setup_pool(&env, 2, 2, 400);
+    let recipient = Address::generate(&env);
+
+    let signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
+    client.pool_withdraw(&signers, &pool_id, &100, &recipient, &None, &Some(50));
+}
+
+#[test]
+fn test_pool_withdraw_before_deadline_succeeds() {
+    // The ledger timestamp is still within the caller-supplied deadline.
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(100);
+
+    let (client, _, pool_id, token, admins) = setup_pool(&env, 2, 2, 400);
+    let recipient = Address::generate(&env);
+
+    let signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
+    client.pool_withdraw(&signers, &pool_id, &100, &recipient, &None, &Some(200));
+
+    assert_eq!(client.get_pool(&pool_id).unwrap().balance, 300);
+    assert_eq!(TokenClient::new(&env, &token).balance(&recipient), 100);
 }
 
 #[test]
@@ -3311,7 +3421,7 @@ fn test_pool_withdraw_m_of_n_fewer_than_threshold_rejected() {
     let recipient = Address::generate(&env);
 
     let signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
-    client.pool_withdraw(&signers, &pool_id, &100, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &100, &recipient, &None, &None);
 }
 
 #[test]
@@ -3326,7 +3436,7 @@ fn test_pool_withdraw_m_of_n_non_admin_rejected() {
 
     let outsider = Address::generate(&env);
     let signers = vec![&env, admins.get(0).unwrap(), outsider];
-    client.pool_withdraw(&signers, &pool_id, &100, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &100, &recipient, &None, &None);
 }
 
 #[test]
@@ -3339,7 +3449,7 @@ fn test_pool_withdraw_m_of_n_exceeds_balance_rejected() {
     let recipient = Address::generate(&env);
 
     let signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
-    client.pool_withdraw(&signers, &pool_id, &101, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &101, &recipient, &None, &None);
 }
 
 // ── Issue #713: pool_withdraw requires minimum threshold signers ──────────────
@@ -3363,7 +3473,7 @@ fn test_pool_withdraw_requires_minimum_threshold_signers() {
 
     // Only 1 signer provided, but threshold is 2 — must panic with "insufficient signers"
     let signers = vec![&env, admins.get(0).unwrap()];
-    client.pool_withdraw(&signers, &pool_id, &50, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &50, &recipient, &None, &None);
 }
 
 // ── Issue #343: full tip flow integration tests ───────────────────────────────
@@ -5672,7 +5782,7 @@ fn test_pool_withdraw_zero_balance_panics_low_balance() {
 
     // Withdrawing any positive amount from an empty pool must panic with "low balance"
     let signers = vec![&env, admins.get(0).unwrap()];
-    client.pool_withdraw(&signers, &pool_id, &1, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &1, &recipient, &None, &None);
 }
 
 // ── Issue #678: add_pool_admin duplicate rejection ────────────────────────────

@@ -97,6 +97,8 @@ proptest! {
                 &pool_id,
                 &amount,
                 &recipient,
+                &None,
+                &None,
             );
             expected_balance -= amount;
         }
@@ -152,6 +154,8 @@ proptest! {
             &pool_id,
             &withdraw_amount,
             &recipient,
+            &None,
+            &None,
         );
         prop_assert!(
             result.is_err(),

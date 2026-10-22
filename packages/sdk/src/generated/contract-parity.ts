@@ -86,6 +86,7 @@ export const CONTRACT_EVENT_MAP: Readonly<Record<string, string>> = {
   PoolDepositEvent: "PoolDepositEvent",
   PostCreatedEvent: "PostCreatedEvent",
   PoolWithdrawEvent: "PoolWithdrawEvent",
+  WithdrawalSlippageExceededEvent: "WithdrawalSlippageExceededEvent",
   DmKeyPublishedEvent: "DmKeyPublishedEvent",
   PoolAdminAddedEvent: "PoolAdminAddedEvent",
   ProposalSignedEvent: "ProposalSignedEvent",

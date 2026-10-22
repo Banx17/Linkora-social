@@ -539,7 +539,7 @@ export class GeneratedLinkoraClient {
       scvAddress(proposer),
       nativeToScVal(parameter),
       scvU64(new_value),
-      nativeToScVal(new_address)
+      new_address === null ? nativeToScVal(null) : scvAddress(new_address)
     );
   }
 
@@ -590,13 +590,22 @@ export class GeneratedLinkoraClient {
    * Contract entrypoint: `pool_withdraw`.
    * SDK method: `poolWithdraw`.
    */
-  poolWithdraw(signers: string[], pool_id: string, amount: bigint, recipient: string): string {
+  poolWithdraw(
+    signers: string[],
+    pool_id: string,
+    amount: bigint,
+    recipient: string,
+    min_out_amount: bigint | null,
+    deadline: bigint | null
+  ): string {
     return this.buildTx(
       "pool_withdraw",
       scvAddressVec(signers),
       scvSymbol(pool_id),
       scvI128(amount),
-      scvAddress(recipient)
+      scvAddress(recipient),
+      min_out_amount === null ? nativeToScVal(null) : scvI128(min_out_amount),
+      deadline === null ? nativeToScVal(null) : scvU64(deadline)
     );
   }
 

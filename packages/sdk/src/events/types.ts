@@ -69,6 +69,11 @@ export type PoolDepositEvent = BaseLinkoraEvent &
 export type PoolWithdrawEvent = BaseLinkoraEvent &
   Omit<Gen.PoolWithdrawEvent, "type"> & { type: "pool_withdraw" };
 
+export type WithdrawalSlippageExceededEvent = BaseLinkoraEvent &
+  Omit<Gen.WithdrawalSlippageExceededEvent, "type"> & {
+    type: "withdrawal_slippage_exceeded";
+  };
+
 export type PoolCreatedEvent = BaseLinkoraEvent &
   Omit<Gen.PoolCreatedEvent, "type"> & { type: "pool_created" };
 
@@ -172,6 +177,7 @@ export type LinkoraEvent =
   | TipEvent
   | PoolDepositEvent
   | PoolWithdrawEvent
+  | WithdrawalSlippageExceededEvent
   | PoolCreatedEvent
   | LikePostEvent
   | ContractUpgradedEvent
@@ -227,6 +233,8 @@ const EVENT_NAMES: Record<string, LinkoraEvent["type"]> = {
   PoolWithdrawEvent: "pool_withdraw",
   withdraw: "pool_withdraw",
   pool_withdraw: "pool_withdraw",
+  WithdrawalSlippageExceededEvent: "withdrawal_slippage_exceeded",
+  withdrawal_slippage_exceeded: "withdrawal_slippage_exceeded",
   PoolCreatedEvent: "pool_created",
   pool_created: "pool_created",
   ContractUpgraded: "contract_upgraded",
@@ -468,6 +476,15 @@ export function parseContractEvent(raw: SorobanEvent, tokenFactoryId?: string): 
           recipient: str(payload.recipient),
           pool_id: str(payload.pool_id),
           amount: big(payload.amount),
+          meta: eventMeta,
+        };
+      case "withdrawal_slippage_exceeded":
+        return {
+          type: eventType,
+          pool_id: str(payload.pool_id),
+          requested_amount: big(payload.requested_amount),
+          received_amount: big(payload.received_amount),
+          min_out_amount: big(payload.min_out_amount),
           meta: eventMeta,
         };
       case "pool_created":
