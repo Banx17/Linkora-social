@@ -39,6 +39,7 @@ import { Database } from "./db";
 import { dispatchNotificationForBusEvent } from "./notifications/events";
 import { scValToNative, xdr } from "@stellar/stellar-sdk";
 import { logger } from "./logger";
+import { CacheKeys } from "./cache";
 
 const TOPIC_FOLLOW = "follow";
 const TOPIC_UNFOLLOW = "unfollow";
@@ -168,11 +169,71 @@ function decodeData(data: unknown): Record<string, unknown> {
 export function createDomainProcessor(
   pool: { query: (sql: string, params?: unknown[]) => Promise<QueryResultLike> },
   notificationService: import("./notifications/service").NotificationService,
-  db?: Database
+  db?: Database,
+  cache?: import("./cache").CacheService
 ): (client: PgClientLike, event: IngestEvent) => Promise<void> {
   return async (client: PgClientLike, event: IngestEvent): Promise<void> => {
     try {
       await processEvent(client, event);
+
+      // Invalidate cached responses after every successful write so readers
+      // see fresh data within one TTL cycle.  Invalidation is fire-and-forget
+      // (errors degrade gracefully to a stale-cache hit, not a broken write).
+      if (cache) {
+        const decodedTopics = decodeTopics(event.topic);
+        const topic = (
+          typeof decodedTopics[0] === "string" ? decodedTopics[0] : ""
+        ).toLowerCase();
+
+        let data = decodeData(event.data);
+        if (Object.keys(data).length === 0 && event.data && typeof event.data === "object") {
+          data = event.data as Record<string, unknown>;
+        }
+        for (const t of decodedTopics) {
+          if (t && typeof t === "object" && !Array.isArray(t)) {
+            Object.assign(data, t);
+          }
+        }
+
+        switch (topic) {
+          case TOPIC_PROFILE_SET:
+          case TOPIC_PROFILE_DELETED: {
+            const user = asString(data.user ?? data.address ?? "");
+            if (user) await cache.invalidate(CacheKeys.profilePattern(user));
+            await cache.invalidate(CacheKeys.profileListPattern());
+            break;
+          }
+
+          case TOPIC_POST_CREATED:
+          case TOPIC_POST_DELETED: {
+            const author = asString(data.author ?? data.user ?? "");
+            // Invalidate all feed caches — posts affect every viewer's feed.
+            // Fan-out invalidation of per-viewer keys is not feasible without
+            // scanning the follow graph, so we flush the entire feed namespace.
+            await cache.invalidate(CacheKeys.feedPattern());
+            if (author) await cache.invalidate(CacheKeys.feedPattern(author));
+            break;
+          }
+
+          case TOPIC_FOLLOW:
+          case TOPIC_UNFOLLOW: {
+            const follower = asString(data.follower ?? data.from ?? "");
+            if (follower) await cache.invalidate(CacheKeys.feedPattern(follower));
+            break;
+          }
+
+          case "pool_created":
+          case "pool_deposit":
+          case "pool_withdraw":
+          case "pool_admin_added":
+          case "pool_admin_removed":
+            await cache.invalidate(CacheKeys.poolListPattern());
+            break;
+
+          default:
+            break;
+        }
+      }
     } catch (err) {
       if (err instanceof MalformedEventValueError) {
         // The whole batch shares one DB transaction (see pipeline.ts), so

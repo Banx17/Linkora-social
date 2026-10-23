@@ -7,6 +7,7 @@ import { validateParams, validateQuery } from "../../middleware/validate";
 import { z } from "zod";
 import { stellarAddressSchema, cursorPaginationSchema } from "@linkora/types/src/schemas";
 import { decodeNumericCursor, decodeTimestampCursor, encodeCursor } from "./cursor";
+import { CacheService, CacheKeys, FEED_TTL_S } from "../../cache";
 
 const exploreQuerySchema = cursorPaginationSchema.extend({
   // Opaque composite cursor (score, id) — see ./cursor.ts (#1329). A bare
@@ -48,7 +49,7 @@ function isPgPool(target: Database | Pool): target is Pool {
   return "query" in target && typeof (target as Pool).query === "function";
 }
 
-export function createFeedRouter(dbOrPg: Database | Pool): Router {
+export function createFeedRouter(dbOrPg: Database | Pool, cache?: CacheService): Router {
   const router = Router();
 
   router.get("/", async (req: Request, res: Response): Promise<void> => {
@@ -58,32 +59,46 @@ export function createFeedRouter(dbOrPg: Database | Pool): Router {
     const rawLimit = Number.isNaN(limit) ? 20 : limit;
     const rawOffset = Number.isNaN(offset) ? 0 : offset;
 
+    // Cache home feed by viewer + offset + limit
+    const cacheKey = CacheKeys.feed(viewer ?? "anon", String(rawOffset), rawLimit);
+    if (cache) {
+      const cached = await cache.get<unknown>(cacheKey);
+      if (cached) {
+        res.json(cached);
+        return;
+      }
+    }
+
     if (isPgPool(dbOrPg)) {
       const posts = await getFeedPosts(dbOrPg, {
         viewerAddress: viewer,
         limit: rawLimit,
         offset: rawOffset,
       });
-      res.json({
+      const body = {
         posts,
         total: posts.length,
         limit: rawLimit,
         offset: rawOffset,
         has_more: posts.length === rawLimit,
-      });
+      };
+      if (cache) await cache.set(cacheKey, body, FEED_TTL_S);
+      res.json(body);
       return;
     }
 
     const db = dbOrPg as Database;
     if (db.getFeed) {
       const { posts, total } = await db.getFeed({ viewer, limit: rawLimit, offset: rawOffset });
-      res.json({
+      const body = {
         posts,
         total,
         limit: rawLimit,
         offset: rawOffset,
         has_more: rawOffset + posts.length < total,
-      });
+      };
+      if (cache) await cache.set(cacheKey, body, FEED_TTL_S);
+      res.json(body);
       return;
     }
 
@@ -93,13 +108,15 @@ export function createFeedRouter(dbOrPg: Database | Pool): Router {
     const { posts, total } = await db.listPosts({ limit: rawLimit * 2, offset: rawOffset });
     const filteredPosts = posts.filter((p) => !blockedSet.has(p.author)).slice(0, rawLimit);
 
-    res.json({
+    const body = {
       posts: filteredPosts,
       total: Math.max(0, total - blockedSet.size),
       limit: rawLimit,
       offset: rawOffset,
       has_more: rawOffset + filteredPosts.length < total,
-    });
+    };
+    if (cache) await cache.set(cacheKey, body, FEED_TTL_S);
+    res.json(body);
   });
 
   router.get(
@@ -188,6 +205,17 @@ export function createFeedRouter(dbOrPg: Database | Pool): Router {
         typeof followingFeedQuerySchema
       >;
 
+      // Cache following feed by (address, cursor, limit). Tag filters bypass
+      // the cache because they are rare and the key space would explode.
+      const cacheKey = !tag ? CacheKeys.feed(address, cursor ?? "", limit) : null;
+      if (cache && cacheKey) {
+        const cached = await cache.get<unknown>(cacheKey);
+        if (cached) {
+          res.json(cached);
+          return;
+        }
+      }
+
       if (!isPgPool(dbOrPg)) {
         const { posts } = await (dbOrPg as Database).listPosts({ limit, offset: 0 });
         res.json({ posts, has_more: false, next_cursor: null });
@@ -237,7 +265,7 @@ export function createFeedRouter(dbOrPg: Database | Pool): Router {
 
       const result = await queryView(dbOrPg, query, params);
 
-      res.json({
+      const body = {
         posts: result.rows.map((row) => ({
           id: row.id,
           author: row.author,
@@ -255,7 +283,10 @@ export function createFeedRouter(dbOrPg: Database | Pool): Router {
                 String(result.rows[result.rows.length - 1].id)
               )
             : null,
-      });
+      };
+
+      if (cache && cacheKey) await cache.set(cacheKey, body, FEED_TTL_S);
+      res.json(body);
     }
   );
 
