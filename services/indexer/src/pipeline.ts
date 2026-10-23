@@ -19,7 +19,7 @@
  */
 
 import { EventBus, BusEvent } from "./bus";
-import { serializationRetriesTotal } from "./metrics";
+import { serializationRetriesTotal, deadLetterEventsTotal, recordProcessingLag } from "./metrics";
 
 export interface QueryResultLike {
   rowCount: number | null;
@@ -257,12 +257,19 @@ export class IngestPipeline {
 
       await client.query("COMMIT");
 
-      // (4) Fan out only after the durable commit.
+      // (4) Record processing lag metrics per event type.
+      const now = Date.now();
+      for (const ev of events) {
+        const eventType = typeof ev.type === "string" ? ev.type : "unknown";
+        recordProcessingLag(eventType, now);
+      }
+
+      // (5) Fan out only after the durable commit.
       for (const ev of events) {
         this.bus.publish(toBusEvent(ev));
       }
 
-      // (5) Commit-aligned side effects (e.g. state root publication) run
+      // (6) Commit-aligned side effects (e.g. state root publication) run
       // only once the batch is durably committed, never on rollback.
       if (this.onCommit) {
         await this.onCommit(newCursor, events);

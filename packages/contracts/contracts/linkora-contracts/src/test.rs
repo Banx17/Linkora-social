@@ -6,6 +6,7 @@ use super::*;
 use alloc::string::String as StdString;
 use ed25519_dalek::{Signer, SigningKey};
 use soroban_sdk::{
+    events::Event as _,
     symbol_short,
     testutils::{storage::Persistent as _, Address as _, Events, Ledger},
     token::{Client as TokenClient, StellarAssetClient},
@@ -1185,6 +1186,8 @@ fn test_pool_authorization() {
         &pool_id,
         &50,
         &other_user,
+        &None,
+        &None,
     );
     assert_eq!(client.get_pool(&pool_id).unwrap().balance, 50);
 }
@@ -1266,7 +1269,14 @@ fn test_pool_withdraw_insufficient_signers() {
     client.pool_deposit(&other_user, &pool_id, &token, &100);
 
     // Only 1 signer when 2 required
-    client.pool_withdraw(&vec![&env, pool_admin1.clone()], &pool_id, &50, &other_user);
+    client.pool_withdraw(
+        &vec![&env, pool_admin1.clone()],
+        &pool_id,
+        &50,
+        &other_user,
+        &None,
+        &None,
+    );
 }
 
 #[test]
@@ -1299,6 +1309,8 @@ fn test_pool_withdraw_unauthorized_signer() {
         &pool_id,
         &50,
         &other_user,
+        &None,
+        &None,
     );
 }
 
@@ -1331,6 +1343,8 @@ fn test_pool_withdraw_exceeds_balance() {
         &pool_id,
         &200,
         &other_user,
+        &None,
+        &None,
     );
 }
 
@@ -1601,6 +1615,185 @@ fn test_create_post_rejects_oversized_content() {
     let author = Address::generate(&env);
     let long_content = StdString::from_iter(core::iter::repeat_n('x', 2001));
     client.create_post(&author, &String::from_str(&env, &long_content));
+}
+
+// ── Time-locked posts (commit-reveal) ────────────────────────────────────
+
+/// sha256 of the raw bytes of `content`, the same digest the contract commits
+/// to in `commit_post`.
+fn sha256_of(env: &Env, content: &String) -> BytesN<32> {
+    let mut buf = alloc::vec![0u8; content.len() as usize];
+    content.copy_into_slice(&mut buf);
+    env.crypto().sha256(&Bytes::from_slice(env, &buf)).into()
+}
+
+#[test]
+fn test_commit_post_stores_hash_and_reveal_time() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+
+    let author = Address::generate(&env);
+    let content = String::from_str(&env, "the real content");
+    let hash = sha256_of(&env, &content);
+
+    let post_id = client.commit_post(&author, &hash, &1_000);
+
+    // The placeholder post exists so feeds and indexers can show it.
+    let post = client.get_post(&post_id).unwrap();
+    assert_eq!(post.author, author);
+    assert_eq!(post.content, String::from_str(&env, "[committed post]"));
+
+    // The commit state holds the hash and the reveal time.
+    let committed = client.get_committed_post(&post_id).unwrap();
+    assert_eq!(committed.post_id, post_id);
+    assert_eq!(committed.author, author);
+    assert_eq!(committed.content_hash, hash);
+    assert_eq!(committed.reveal_time, 1_000);
+}
+
+#[test]
+fn test_commit_post_publishes_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+
+    let author = Address::generate(&env);
+    let hash = sha256_of(&env, &String::from_str(&env, "the real content"));
+    let post_id = client.commit_post(&author, &hash, &1_000);
+
+    let expected = PostCommittedEvent {
+        version: EVENT_VERSION,
+        post_id,
+        author: author.clone(),
+        content_hash: hash,
+        reveal_time: 1_000,
+    };
+    let expected_xdr = expected.to_xdr(&env, &client.address);
+    let events = env.events().all();
+    assert!(events.events().iter().any(|event| *event == expected_xdr));
+}
+
+#[test]
+#[should_panic(expected = "reveal time must be in the future")]
+fn test_commit_post_rejects_reveal_time_in_the_past() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+
+    let author = Address::generate(&env);
+    let hash = sha256_of(&env, &String::from_str(&env, "the real content"));
+    client.commit_post(&author, &hash, &0);
+}
+
+#[test]
+#[should_panic(expected = "reveal time not reached")]
+fn test_reveal_post_before_reveal_time_reverts() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+
+    let author = Address::generate(&env);
+    let content = String::from_str(&env, "the real content");
+    let hash = sha256_of(&env, &content);
+    let post_id = client.commit_post(&author, &hash, &1_000);
+
+    // The ledger timestamp is still 0, the reveal time has not been reached.
+    client.reveal_post(&author, &post_id, &content);
+}
+
+#[test]
+#[should_panic(expected = "content hash mismatch")]
+fn test_reveal_post_rejects_content_not_matching_the_hash() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+
+    let author = Address::generate(&env);
+    let content = String::from_str(&env, "the real content");
+    let hash = sha256_of(&env, &content);
+    let post_id = client.commit_post(&author, &hash, &1_000);
+
+    env.ledger().set_timestamp(2_000);
+    let other_content = String::from_str(&env, "some other content");
+    client.reveal_post(&author, &post_id, &other_content);
+}
+
+#[test]
+#[should_panic(expected = "only author can reveal post")]
+fn test_reveal_post_rejects_other_author() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+
+    let author = Address::generate(&env);
+    let other = Address::generate(&env);
+    let content = String::from_str(&env, "the real content");
+    let hash = sha256_of(&env, &content);
+    let post_id = client.commit_post(&author, &hash, &1_000);
+
+    env.ledger().set_timestamp(2_000);
+    client.reveal_post(&other, &post_id, &content);
+}
+
+#[test]
+fn test_reveal_post_replaces_placeholder_and_clears_commit() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+
+    let author = Address::generate(&env);
+    let content = String::from_str(&env, "the real content");
+    let hash = sha256_of(&env, &content);
+    let post_id = client.commit_post(&author, &hash, &1_000);
+
+    // Reveal once the reveal time has passed.
+    env.ledger().set_timestamp(2_000);
+    client.reveal_post(&author, &post_id, &content);
+
+    let post = client.get_post(&post_id).unwrap();
+    assert_eq!(post.content, content);
+    assert_eq!(post.author, author);
+
+    // The commit state is cleared: the post is not committed anymore.
+    assert!(client.get_committed_post(&post_id).is_none());
+}
+
+#[test]
+fn test_reveal_post_publishes_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+
+    let author = Address::generate(&env);
+    let content = String::from_str(&env, "the real content");
+    let hash = sha256_of(&env, &content);
+    let post_id = client.commit_post(&author, &hash, &1_000);
+
+    env.ledger().set_timestamp(2_000);
+    client.reveal_post(&author, &post_id, &content);
+
+    let expected = PostRevealedEvent {
+        version: EVENT_VERSION,
+        post_id,
+        author: author.clone(),
+        content_hash: hash,
+    };
+    let expected_xdr = expected.to_xdr(&env, &client.address);
+    let events = env.events().all();
+    assert!(events.events().iter().any(|event| *event == expected_xdr));
+}
+
+#[test]
+#[should_panic(expected = "post is not committed")]
+fn test_reveal_post_rejects_post_that_was_never_committed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+
+    let author = Address::generate(&env);
+    let post_id = client.create_post(&author, &String::from_str(&env, "hello"));
+    client.reveal_post(&author, &post_id, &String::from_str(&env, "hello"));
 }
 
 #[test]
@@ -3165,7 +3358,7 @@ fn test_pool_withdraw_exactly_threshold_2_of_3_succeeds() {
 
     // Sign with exactly 2 of the 3 admins.
     let signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
-    client.pool_withdraw(&signers, &pool_id, &100, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &100, &recipient, &None, &None);
 
     assert_eq!(client.get_pool(&pool_id).unwrap().balance, 200);
     // Recipient must have received the tokens.
@@ -3183,7 +3376,7 @@ fn test_pool_withdraw_rejects_duplicate_signers_for_threshold() {
     let signer = admins.get(0).unwrap();
     let duplicate_signers = vec![&env, signer.clone(), signer];
 
-    client.pool_withdraw(&duplicate_signers, &pool_id, &50, &recipient);
+    client.pool_withdraw(&duplicate_signers, &pool_id, &50, &recipient, &None, &None);
 }
 
 #[test]
@@ -3196,7 +3389,7 @@ fn test_pool_withdraw_superset_of_threshold_also_succeeds() {
     let recipient = Address::generate(&env);
 
     // All 5 admins sign, threshold is only 3.
-    client.pool_withdraw(&admins, &pool_id, &200, &recipient);
+    client.pool_withdraw(&admins, &pool_id, &200, &recipient, &None, &None);
 
     assert_eq!(client.get_pool(&pool_id).unwrap().balance, 300);
     assert_eq!(TokenClient::new(&env, &token).balance(&recipient), 200);
@@ -3216,7 +3409,7 @@ fn test_pool_withdraw_3_of_5_threshold_succeeds() {
         admins.get(2).unwrap(),
         admins.get(4).unwrap(),
     ];
-    client.pool_withdraw(&signers, &pool_id, &150, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &150, &recipient, &None, &None);
 
     assert_eq!(client.get_pool(&pool_id).unwrap().balance, 450);
     assert_eq!(TokenClient::new(&env, &token).balance(&recipient), 150);
@@ -3233,13 +3426,13 @@ fn test_pool_withdraw_sequential_withdrawals_maintain_balance() {
 
     let signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
 
-    client.pool_withdraw(&signers, &pool_id, &300, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &300, &recipient, &None, &None);
     assert_eq!(client.get_pool(&pool_id).unwrap().balance, 700);
 
-    client.pool_withdraw(&signers, &pool_id, &200, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &200, &recipient, &None, &None);
     assert_eq!(client.get_pool(&pool_id).unwrap().balance, 500);
 
-    client.pool_withdraw(&signers, &pool_id, &500, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &500, &recipient, &None, &None);
     assert_eq!(client.get_pool(&pool_id).unwrap().balance, 0);
 
     assert_eq!(TokenClient::new(&env, &token).balance(&recipient), 1000);
@@ -3255,7 +3448,7 @@ fn test_pool_withdraw_exact_full_balance_succeeds() {
     let recipient = Address::generate(&env);
 
     let signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
-    client.pool_withdraw(&signers, &pool_id, &250, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &250, &recipient, &None, &None);
 
     assert_eq!(client.get_pool(&pool_id).unwrap().balance, 0);
     assert_eq!(TokenClient::new(&env, &token).balance(&recipient), 250);
@@ -3270,7 +3463,7 @@ fn test_pool_withdraw_event_emitted() {
     let recipient = Address::generate(&env);
 
     let signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
-    client.pool_withdraw(&signers, &pool_id, &100, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &100, &recipient, &None, &None);
 
     let all_events = env.events().all();
     // At least one event must have been emitted after the withdrawal.
@@ -3278,6 +3471,102 @@ fn test_pool_withdraw_event_emitted() {
         !all_events.events().is_empty(),
         "withdrawal must emit at least one event"
     );
+}
+
+#[test]
+fn test_pool_withdraw_meeting_min_out_succeeds() {
+    // A withdrawal whose received amount meets `min_out_amount` goes through.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _, pool_id, token, admins) = setup_pool(&env, 2, 2, 400);
+    let recipient = Address::generate(&env);
+
+    let signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
+    client.pool_withdraw(&signers, &pool_id, &100, &recipient, &Some(100), &None);
+
+    assert_eq!(client.get_pool(&pool_id).unwrap().balance, 300);
+    assert_eq!(TokenClient::new(&env, &token).balance(&recipient), 100);
+}
+
+#[test]
+#[should_panic(expected = "slippage exceeded")]
+fn test_pool_withdraw_below_min_out_reverts() {
+    // The received amount (100) is below `min_out_amount` (200): revert.
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _, pool_id, _, admins) = setup_pool(&env, 2, 2, 400);
+    let recipient = Address::generate(&env);
+
+    let signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
+    client.pool_withdraw(&signers, &pool_id, &100, &recipient, &Some(200), &None);
+}
+
+#[test]
+fn test_pool_withdraw_slippage_publishes_event() {
+    // The slippage event is published on the failure path. The invocation
+    // reverts, so the event is rolled back with the failed call and is only
+    // observable through the host event buffer (never in committed events).
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _, pool_id, _, admins) = setup_pool(&env, 2, 2, 400);
+    let recipient = Address::generate(&env);
+
+    let signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
+    let res = client.try_pool_withdraw(&signers, &pool_id, &100, &recipient, &Some(200), &None);
+    assert!(res.is_err(), "withdrawal below min_out_amount must fail");
+
+    let expected = WithdrawalSlippageExceededEvent {
+        version: EVENT_VERSION,
+        pool_id: pool_id.clone(),
+        requested_amount: 100,
+        received_amount: 100,
+        min_out_amount: 200,
+    };
+    let expected_xdr = expected.to_xdr(&env, &client.address);
+
+    let events = env.host().get_events().unwrap();
+    assert!(
+        events
+            .0
+            .iter()
+            .any(|e| e.failed_call && e.event == expected_xdr),
+        "withdrawal_slippage_exceeded event must be published by the failing withdrawal"
+    );
+}
+
+#[test]
+#[should_panic(expected = "deadline expired")]
+fn test_pool_withdraw_after_deadline_reverts() {
+    // The ledger timestamp is past the caller-supplied deadline: revert.
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(100);
+
+    let (client, _, pool_id, _, admins) = setup_pool(&env, 2, 2, 400);
+    let recipient = Address::generate(&env);
+
+    let signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
+    client.pool_withdraw(&signers, &pool_id, &100, &recipient, &None, &Some(50));
+}
+
+#[test]
+fn test_pool_withdraw_before_deadline_succeeds() {
+    // The ledger timestamp is still within the caller-supplied deadline.
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(100);
+
+    let (client, _, pool_id, token, admins) = setup_pool(&env, 2, 2, 400);
+    let recipient = Address::generate(&env);
+
+    let signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
+    client.pool_withdraw(&signers, &pool_id, &100, &recipient, &None, &Some(200));
+
+    assert_eq!(client.get_pool(&pool_id).unwrap().balance, 300);
+    assert_eq!(TokenClient::new(&env, &token).balance(&recipient), 100);
 }
 
 #[test]
@@ -3311,7 +3600,7 @@ fn test_pool_withdraw_m_of_n_fewer_than_threshold_rejected() {
     let recipient = Address::generate(&env);
 
     let signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
-    client.pool_withdraw(&signers, &pool_id, &100, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &100, &recipient, &None, &None);
 }
 
 #[test]
@@ -3326,7 +3615,7 @@ fn test_pool_withdraw_m_of_n_non_admin_rejected() {
 
     let outsider = Address::generate(&env);
     let signers = vec![&env, admins.get(0).unwrap(), outsider];
-    client.pool_withdraw(&signers, &pool_id, &100, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &100, &recipient, &None, &None);
 }
 
 #[test]
@@ -3339,7 +3628,7 @@ fn test_pool_withdraw_m_of_n_exceeds_balance_rejected() {
     let recipient = Address::generate(&env);
 
     let signers = vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
-    client.pool_withdraw(&signers, &pool_id, &101, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &101, &recipient, &None, &None);
 }
 
 // ── Issue #713: pool_withdraw requires minimum threshold signers ──────────────
@@ -3363,7 +3652,7 @@ fn test_pool_withdraw_requires_minimum_threshold_signers() {
 
     // Only 1 signer provided, but threshold is 2 — must panic with "insufficient signers"
     let signers = vec![&env, admins.get(0).unwrap()];
-    client.pool_withdraw(&signers, &pool_id, &50, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &50, &recipient, &None, &None);
 }
 
 // ── Issue #343: full tip flow integration tests ───────────────────────────────
@@ -5672,7 +5961,7 @@ fn test_pool_withdraw_zero_balance_panics_low_balance() {
 
     // Withdrawing any positive amount from an empty pool must panic with "low balance"
     let signers = vec![&env, admins.get(0).unwrap()];
-    client.pool_withdraw(&signers, &pool_id, &1, &recipient);
+    client.pool_withdraw(&signers, &pool_id, &1, &recipient, &None, &None);
 }
 
 // ── Issue #678: add_pool_admin duplicate rejection ────────────────────────────
@@ -6747,11 +7036,7 @@ fn test_register_oracle_different_names_still_allowed() {
         &symbol_short!("alpha"),
         &oracle_pubkey(&env, &key_a),
     );
-    client.register_oracle(
-        &admin,
-        &symbol_short!("beta"),
-        &oracle_pubkey(&env, &key_b),
-    );
+    client.register_oracle(&admin, &symbol_short!("beta"), &oracle_pubkey(&env, &key_b));
 
     let contract_id = client.address.clone();
     env.as_contract(&contract_id, || {
@@ -8622,6 +8907,30 @@ fn test_verify_credential_max_depth_proof() {
 }
 
 #[test]
+#[should_panic(expected = "credential proof exceeds the maximum supported depth")]
+fn test_verify_credential_rejects_proof_deeper_than_maximum() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _) = setup_contract(&env);
+    let signing_key = credential_authority_signing_key(1);
+    client.set_credential_authority(&admin, &credential_authority_pubkey(&env, &signing_key));
+    let user = Address::generate(&env);
+    let leaf = BytesN::from_array(&env, &[1u8; 32]);
+    client.update_credential_root(
+        &user,
+        &leaf,
+        &sign_credential_root(&env, &signing_key, &leaf),
+    );
+    let sibling = BytesN::from_array(&env, &[2u8; 32]);
+    let mut proof = Vec::new(&env);
+    for _ in 0..=MAX_CREDENTIAL_PROOF_DEPTH {
+        proof.push_back(sibling.clone());
+    }
+    let nullifier = BytesN::from_array(&env, &[11u8; 32]);
+    client.verify_credential(&user, &proof, &leaf, &nullifier);
+}
+
+#[test]
 fn test_update_credential_root_32_bytes_accepted() {
     let env = Env::default();
     env.mock_all_auths();
@@ -8868,4 +9177,287 @@ fn test_batch_cleanup_post_emits_event_summary() {
 
     client.batch_cleanup_post(&post_id, &10);
     assert!(client.get_post(&post_id).is_none());
+}
+
+// ── Per-module pause tests ───────────────────────────────────────────────────
+
+fn setup_with_pauser(env: &Env) -> (LinkoraContractClient<'_>, Address) {
+    let (client, admin, _) = setup_contract(env);
+    let pauser = Address::generate(env);
+    client.grant_role(&admin, &pauser, &Role::Pauser);
+    (client, pauser)
+}
+
+#[test]
+fn pause_module_flags_are_independent() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, pauser) = setup_with_pauser(&env);
+
+    client.pause_module(&pauser, &PauseModule::Tips);
+    assert!(client.is_module_paused(&PauseModule::Tips));
+    assert!(!client.is_module_paused(&PauseModule::Posts));
+    assert!(!client.is_module_paused(&PauseModule::Social));
+
+    let author = Address::generate(&env);
+    let id = client.create_post(&author, &String::from_str(&env, "still live"));
+    assert_eq!(id, 1);
+
+    client.unpause_module(&pauser, &PauseModule::Tips);
+    assert!(!client.is_module_paused(&PauseModule::Tips));
+}
+
+#[test]
+#[should_panic(expected = "module is paused")]
+fn pause_posts_blocks_create_post() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, pauser) = setup_with_pauser(&env);
+
+    client.pause_module(&pauser, &PauseModule::Posts);
+    let author = Address::generate(&env);
+    client.create_post(&author, &String::from_str(&env, "blocked"));
+}
+
+#[test]
+#[should_panic(expected = "module is paused")]
+fn pause_posts_blocks_batch_create_post() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, pauser) = setup_with_pauser(&env);
+
+    client.pause_module(&pauser, &PauseModule::Posts);
+    let author = Address::generate(&env);
+    client.batch_create_post(&author, &vec![&env, String::from_str(&env, "blocked")]);
+}
+
+#[test]
+#[should_panic(expected = "module is paused")]
+fn pause_social_blocks_follow() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, pauser) = setup_with_pauser(&env);
+
+    client.pause_module(&pauser, &PauseModule::Social);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    client.follow(&alice, &bob);
+}
+
+#[test]
+#[should_panic(expected = "module is paused")]
+fn pause_tips_blocks_tip() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, pauser) = setup_with_pauser(&env);
+
+    client.pause_module(&pauser, &PauseModule::Tips);
+    let tipper = Address::generate(&env);
+    client.tip(&tipper, &1u64, &Address::generate(&env), &100i128);
+}
+
+#[test]
+#[should_panic(expected = "module is paused")]
+fn pause_pools_blocks_create_pool() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, pauser) = setup_with_pauser(&env);
+
+    client.pause_module(&pauser, &PauseModule::Pools);
+    client.create_pool(
+        &pauser,
+        &symbol_short!("pool"),
+        &Address::generate(&env),
+        &vec![&env, pauser.clone()],
+        &1,
+    );
+}
+
+#[test]
+#[should_panic(expected = "module is paused")]
+fn pause_governance_blocks_gov_propose() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, pauser) = setup_with_pauser(&env);
+
+    client.pause_module(&pauser, &PauseModule::Governance);
+    let proposer = Address::generate(&env);
+    client.gov_propose(&proposer, &GovParameter::FeeBps, &100u64, &None);
+}
+
+#[test]
+#[should_panic(expected = "module is paused")]
+fn pause_credentials_blocks_authority_update() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, pauser) = setup_with_pauser(&env);
+
+    client.pause_module(&pauser, &PauseModule::Credentials);
+    client.set_credential_authority(&pauser, &BytesN::from_array(&env, &[7u8; 32]));
+}
+
+#[test]
+#[should_panic(expected = "Pauser role required")]
+fn pause_module_requires_pauser_role() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+
+    let outsider = Address::generate(&env);
+    client.pause_module(&outsider, &PauseModule::Posts);
+}
+
+#[test]
+#[should_panic(expected = "module already paused")]
+fn pause_module_twice_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, pauser) = setup_with_pauser(&env);
+
+    client.pause_module(&pauser, &PauseModule::Posts);
+    client.pause_module(&pauser, &PauseModule::Posts);
+}
+
+#[test]
+#[should_panic(expected = "module not paused")]
+fn unpause_module_when_running_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, pauser) = setup_with_pauser(&env);
+
+    client.unpause_module(&pauser, &PauseModule::Posts);
+}
+
+// ── batch_create_post tests ──────────────────────────────────────────────────
+
+#[test]
+fn batch_create_post_returns_ids_in_order() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+    let author = Address::generate(&env);
+
+    let ids = client.batch_create_post(
+        &author,
+        &vec![
+            &env,
+            String::from_str(&env, "one"),
+            String::from_str(&env, "two"),
+            String::from_str(&env, "three"),
+        ],
+    );
+    assert_eq!(ids, vec![&env, 1u64, 2u64, 3u64]);
+    assert_eq!(client.get_post_count(), 3);
+    assert_eq!(
+        client.get_posts_by_author(&author, &0, &10),
+        vec![&env, 1u64, 2u64, 3u64]
+    );
+    assert_eq!(
+        client.get_post(&2).unwrap().content,
+        String::from_str(&env, "two")
+    );
+}
+
+#[test]
+#[should_panic(expected = "content must be at most 280 characters")]
+fn batch_create_post_rejects_over_limit_content() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+    let author = Address::generate(&env);
+
+    let too_long = String::from_str(&env, &"a".repeat(281));
+    client.batch_create_post(&author, &vec![&env, String::from_str(&env, "ok"), too_long]);
+}
+
+#[test]
+fn batch_create_post_is_atomic_on_invalid_content() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+    let author = Address::generate(&env);
+
+    let too_long = String::from_str(&env, &"a".repeat(281));
+    let result =
+        client.try_batch_create_post(&author, &vec![&env, String::from_str(&env, "ok"), too_long]);
+    assert!(result.is_err());
+    assert_eq!(client.get_post_count(), 0);
+}
+
+#[test]
+#[should_panic(expected = "batch size must be between 1 and 10")]
+fn batch_create_post_rejects_oversized_batch() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+    let author = Address::generate(&env);
+
+    let mut contents = vec![&env];
+    for _ in 0..11 {
+        contents.push_back(String::from_str(&env, "x"));
+    }
+    client.batch_create_post(&author, &contents);
+}
+
+#[test]
+#[should_panic(expected = "batch size must be between 1 and 10")]
+fn batch_create_post_rejects_empty_batch() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+    let author = Address::generate(&env);
+
+    client.batch_create_post(&author, &vec![&env]);
+}
+
+// ── get_recent_posts tests ───────────────────────────────────────────────────
+
+#[test]
+fn get_recent_posts_is_newest_first_and_paginates() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+    let author = Address::generate(&env);
+
+    assert_eq!(client.get_recent_posts(&0, &10).len(), 0);
+    for i in 1..=5 {
+        client.create_post(&author, &String::from_str(&env, &format!("post {i}")));
+    }
+
+    assert_eq!(client.get_recent_posts(&0, &2), vec![&env, 5u64, 4u64]);
+    assert_eq!(client.get_recent_posts(&2, &2), vec![&env, 3u64, 2u64]);
+    assert_eq!(client.get_recent_posts(&4, &2), vec![&env, 1u64]);
+    assert_eq!(client.get_recent_posts(&5, &2).len(), 0);
+}
+
+#[test]
+fn get_recent_posts_skips_deleted_posts() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+    let author = Address::generate(&env);
+
+    for i in 1..=5 {
+        client.create_post(&author, &String::from_str(&env, &format!("post {i}")));
+    }
+    client.delete_post(&author, &4);
+    client.delete_post(&author, &2);
+
+    assert_eq!(
+        client.get_recent_posts(&0, &10),
+        vec![&env, 5u64, 3u64, 1u64]
+    );
+    assert_eq!(client.get_recent_posts(&1, &1), vec![&env, 3u64]);
+    assert_eq!(client.get_recent_posts(&1, &2), vec![&env, 3u64, 1u64]);
+    assert_eq!(client.get_recent_posts(&3, &5).len(), 0);
+}
+
+#[test]
+#[should_panic(expected = "limit must be between 1 and 50")]
+fn get_recent_posts_rejects_limit_over_max_page() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _) = setup_contract(&env);
+
+    client.get_recent_posts(&0, &51);
 }

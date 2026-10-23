@@ -12,7 +12,7 @@
  * network before submitting.
  */
 
-import { Transaction, TransactionBuilder, type FeeBumpTransaction, hash } from "@stellar/stellar-base";
+import { Transaction, TransactionBuilder, FeeBumpTransaction, hash } from "@stellar/stellar-base";
 import { InvalidSignedTransactionError } from "./errors.js";
 
 export const SIGNED_TRANSACTION_FORMAT = "linkora-sdk/signed-transaction";
@@ -34,7 +34,8 @@ function toHex(bytes: Buffer): string {
   return bytes.toString("hex");
 }
 
-function isTransactionLike(value: unknown): value is Transaction | FeeBumpTransaction {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function _isTransactionLike(value: unknown): value is Transaction | FeeBumpTransaction {
   return (
     typeof value === "object" &&
     value !== null &&
@@ -55,9 +56,7 @@ export function buildPortableSignedTransaction(
   networkPassphrase: string
 ): PortableSignedTransaction {
   const envelope =
-    typeof signedXdrOrTx === "string"
-      ? signedXdrOrTx
-      : signedXdrOrTx.toEnvelope().toXDR("base64");
+    typeof signedXdrOrTx === "string" ? signedXdrOrTx : signedXdrOrTx.toEnvelope().toXDR("base64");
 
   if (typeof envelope !== "string" || envelope.trim().length === 0) {
     throw new InvalidSignedTransactionError("Cannot export an empty transaction envelope.");
@@ -117,9 +116,7 @@ export function importSignedTransaction(
       );
     }
     if (typeof parsed !== "object" || parsed === null) {
-      throw new InvalidSignedTransactionError(
-        "Portable signed transaction must be a JSON object."
-      );
+      throw new InvalidSignedTransactionError("Portable signed transaction must be a JSON object.");
     }
     payload = parsed as PortableSignedTransaction;
   } else if (typeof portable === "object" && portable !== null) {

@@ -3,7 +3,8 @@
 mod test;
 
 use soroban_sdk::{
-    contract, contractevent, contractimpl, symbol_short, Address, BytesN, Env, String, Symbol,
+    contract, contractevent, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
+    String, Symbol, Vec,
 };
 
 #[macro_export]
@@ -29,19 +30,20 @@ const MAX_SYMBOL_LEN: u32 = 16;
 
 // ── TTL ───────────────────────────────────────────────────────────────────────
 
+const EVENT_VERSION: u32 = 1;
 const LEDGER_BUMP: u32 = 535_000;
 const LEDGER_THRESHOLD: u32 = 535_000 - 100;
 
 // ── Events ────────────────────────────────────────────────────────────────────
 
 /// Emitted when a creator token is successfully deployed via the factory.
-///
-/// Topics: (TokenFactory, token_deployed, v1)
 #[contractevent]
 #[derive(Clone)]
 pub struct CreatorTokenDeployedEvent {
     /// The account that requested the deployment and now administers the
     /// new token (SEP-41 admin, mint authority).
+    #[topic]
+    pub version: u32,
     #[topic]
     pub deployer: Address,
     /// Deterministic address of the newly deployed SEP-41 token contract.
@@ -51,6 +53,44 @@ pub struct CreatorTokenDeployedEvent {
     pub name: String,
     /// Token symbol/ticker, as passed to `deploy_creator_token`.
     pub symbol: String,
+}
+
+/// Emitted when a deployed creator token is recorded in the metadata registry.
+#[contractevent]
+#[derive(Clone)]
+pub struct CreatorTokenRegisteredEvent {
+    #[topic]
+    pub version: u32,
+    #[topic]
+    pub creator: Address,
+    #[topic]
+    pub token_address: Address,
+    pub symbol: String,
+    pub deployed_ledger: u32,
+}
+
+// ── Metadata Registry ─────────────────────────────────────────────────────────
+
+/// Persistent storage keys for the creator-token metadata registry.
+#[contracttype]
+#[derive(Clone)]
+pub enum DataKey {
+    /// token address -> TokenMetadata
+    TokenMetadata(Address),
+    /// creator address -> Vec<Address> of tokens they deployed
+    CreatorTokens(Address),
+}
+
+/// On-chain metadata for a token deployed through the factory, for discovery.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TokenMetadata {
+    pub token: Address,
+    pub creator: Address,
+    pub name: String,
+    pub symbol: String,
+    pub decimals: u32,
+    pub deployed_ledger: u32,
 }
 
 // ── Limits ───────────────────────────────────────────────────────────────────
@@ -135,6 +175,42 @@ impl TokenFactoryContract {
             .instance()
             .extend_ttl(LEDGER_THRESHOLD, LEDGER_BUMP);
         env.storage().instance().get(&TOKEN_WASM).unwrap()
+    }
+
+    // ── Metadata Registry ─────────────────────────────────────────────────────
+
+    /// Look up the on-chain metadata recorded for a deployed creator token.
+    ///
+    /// @param token Address of a token previously returned by `deploy_creator_token`.
+    /// @return The token's metadata, or `None` if this factory did not deploy it.
+    pub fn get_token_metadata(env: Env, token: Address) -> Option<TokenMetadata> {
+        let key = DataKey::TokenMetadata(token);
+        let metadata: Option<TokenMetadata> = env.storage().persistent().get(&key);
+        if metadata.is_some() {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, LEDGER_THRESHOLD, LEDGER_BUMP);
+        }
+        metadata
+    }
+
+    /// List every token a creator has deployed through this factory.
+    ///
+    /// @param creator Account passed as `deployer` to `deploy_creator_token`.
+    /// @return Token addresses in deployment order (empty if none).
+    pub fn get_tokens_by_creator(env: Env, creator: Address) -> Vec<Address> {
+        let key = DataKey::CreatorTokens(creator);
+        let tokens: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or(Vec::new(&env));
+        if !tokens.is_empty() {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, LEDGER_THRESHOLD, LEDGER_BUMP);
+        }
+        tokens
     }
 
     // ── Deployment ────────────────────────────────────────────────────────────
@@ -226,8 +302,12 @@ impl TokenFactoryContract {
             );
         }
 
+        // Record the token in the metadata registry for discovery.
+        register_token_metadata(&env, &deployer, &token_address, &name, &symbol, decimals);
+
         // Emit canonical factory event.
         CreatorTokenDeployedEvent {
+            version: EVENT_VERSION,
             deployer,
             token_address: token_address.clone(),
             name,
@@ -256,4 +336,52 @@ impl TokenFactoryContract {
         buf.append(&symbol.to_bytes());
         env.crypto().sha256(&buf).into()
     }
+}
+
+/// Record a freshly deployed creator token in the metadata registry, index it
+/// under its creator, and emit `CreatorTokenRegisteredEvent`.
+fn register_token_metadata(
+    env: &Env,
+    creator: &Address,
+    token: &Address,
+    name: &String,
+    symbol: &String,
+    decimals: u32,
+) {
+    let deployed_ledger = env.ledger().sequence();
+    let metadata = TokenMetadata {
+        token: token.clone(),
+        creator: creator.clone(),
+        name: name.clone(),
+        symbol: symbol.clone(),
+        decimals,
+        deployed_ledger,
+    };
+
+    let meta_key = DataKey::TokenMetadata(token.clone());
+    env.storage().persistent().set(&meta_key, &metadata);
+    env.storage()
+        .persistent()
+        .extend_ttl(&meta_key, LEDGER_THRESHOLD, LEDGER_BUMP);
+
+    let creator_key = DataKey::CreatorTokens(creator.clone());
+    let mut tokens: Vec<Address> = env
+        .storage()
+        .persistent()
+        .get(&creator_key)
+        .unwrap_or(Vec::new(env));
+    tokens.push_back(token.clone());
+    env.storage().persistent().set(&creator_key, &tokens);
+    env.storage()
+        .persistent()
+        .extend_ttl(&creator_key, LEDGER_THRESHOLD, LEDGER_BUMP);
+
+    CreatorTokenRegisteredEvent {
+        version: EVENT_VERSION,
+        creator: creator.clone(),
+        token_address: token.clone(),
+        symbol: symbol.clone(),
+        deployed_ledger,
+    }
+    .publish(env);
 }

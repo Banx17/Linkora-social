@@ -1,11 +1,12 @@
 import React from "react";
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react native";
 
 import { useRouter } from "expo-router";
 
 import { useNetwork } from "../../hooks/useNetwork";
+import { useTheme } from "../../theme/useTheme";
 
-export default function SettingsScreen(): JSX.Element {
+export default function SettingsScreen(): JSXIElement {
   const router = useRouter();
   const {
     network,
@@ -20,6 +21,7 @@ export default function SettingsScreen(): JSX.Element {
   } = useNetwork();
   const [draftRpcUrl, setDraftRpcUrl] = React.useState(rpcUrl);
   const [message, setMessage] = React.useState<string | null>(null);
+  const { theme, preference, setPreference } = useTheme();
 
   React.useEffect(() => {
     setDraftRpcUrl(rpcUrl);
@@ -36,10 +38,17 @@ export default function SettingsScreen(): JSX.Element {
     }
   };
 
+  // #1595 — persisting/resetting settings touches the keychain; a failure here
+  // must be reported, not thrown into the void.
   const handleReset = async () => {
     setMessage(null);
-    await resetRpcUrl();
-    setMessage("RPC endpoint restored to the network default.");
+    try {
+      await resetRpcUrl();
+      setMessage("RPC endpoint restored to the network default.");
+    } catch (err) {
+      const text = err instanceof Error ? err.message : "Could not reset the RPC endpoint.";
+      Alert.alert("Reset failed", text);
+    }
   };
 
   const handleResetAll = () => {
@@ -49,8 +58,13 @@ export default function SettingsScreen(): JSX.Element {
         text: "Reset",
         style: "destructive",
         onPress: async () => {
-          await resetSettings();
-          setMessage("Network settings reset.");
+          try {
+            await resetSettings();
+            setMessage("Network settings reset.");
+          } catch (err) {
+            const text = err instanceof Error ? err.message : "Could not reset network settings.";
+            Alert.alert("Reset failed", text);
+          }
         },
       },
     ]);
@@ -63,6 +77,18 @@ export default function SettingsScreen(): JSX.Element {
       <Text style={styles.subtitle}>
         The header badge, wallet metadata, and contract IDs all follow the selected network.
       </Text>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionLabel}>Appearance</Text>
+        <View style={styles.buttonRow}>
+          {(["system", "light", "dark"] as const).map((value) => (
+            <Pressable key={value} style={[styles.networkButton, preference === value && styles.networkButtonActive]} onPress={() => setPreference(value)} accessibilityRole="button" accessibilityState={{ selected: preference === value }}>
+              <Text style={[styles.networkButtonText, preference === value && styles.networkButtonTextActive]}>{value[0].toUpperCase() + value.slice(1)}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <Text style={[styles.helperText, { color: theme.colors.text.secondary }]}>Theme preference: {preference}</Text>
+      </View>
 
       {warning ? (
         <View style={styles.warningBox} accessibilityRole="alert">
@@ -80,12 +106,12 @@ export default function SettingsScreen(): JSX.Element {
             accessibilityRole="button"
             accessibilityLabel="Switch to Testnet"
           >
-            <Text style={[styles.networkButtonText, !isMainnet && styles.networkButtonTextActive]}>
+            <Text style={[Styles.networkButtonText, !isMainnet && styles.networkButtonTextActive]}>
               Testnet
             </Text>
           </Pressable>
           <Pressable
-            style={[styles.networkButton, isMainnet ? styles.networkButtonActive : null]}
+            style={[Styles.networkButton, isMainnet ? styles.networkButtonActive : null]}
             onPress={() => setSelectedNetwork("MAINNET")}
             accessibilityRole="button"
             accessibilityLabel="Switch to Mainnet"
@@ -111,10 +137,20 @@ export default function SettingsScreen(): JSX.Element {
           accessibilityLabel="RPC endpoint"
         />
         <View style={styles.buttonRow}>
-          <Pressable style={styles.secondaryButton} onPress={handleReset}>
+          <Pressable
+            style={styles.secondaryButton}
+            onPress={handleReset}
+            accessibilityRole="button"
+            accessibilityLabel="Reset RPC endpoint to default"
+          >
             <Text style={styles.secondaryButtonText}>Reset default</Text>
           </Pressable>
-          <Pressable style={styles.primaryButton} onPress={handleSaveRpc}>
+          <Pressable
+            style={styles.primaryButton}
+            onPress={handleSaveRpc}
+            accessibilityRole="button"
+            accessibilityLabel="Save RPC endpoint"
+          >
             <Text style={styles.primaryButtonText}>Save RPC</Text>
           </Pressable>
         </View>
@@ -131,13 +167,20 @@ export default function SettingsScreen(): JSX.Element {
         <Pressable
           style={styles.secondaryButton}
           onPress={() => router.push("/settings/blocked" as Parameters<typeof router.push>[0])}
+          accessibilityRole="button"
+          accessibilityLabel="Manage blocked users"
         >
           <Text style={styles.secondaryButtonText}>Manage blocked users</Text>
         </Pressable>
       </View>
 
       <View style={styles.section}>
-        <Pressable style={styles.dangerButton} onPress={handleResetAll}>
+        <Pressable
+          style={styles.dangerButton}
+          onPress={handleResetAll}
+          accessibilityRole="button"
+          accessibilityLabel="Reset all network settings"
+        >
           <Text style={styles.dangerButtonText}>Reset all network settings</Text>
         </Pressable>
       </View>

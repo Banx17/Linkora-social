@@ -1,6 +1,8 @@
 import { useCallback } from "react";
 import { useToast } from "../context/ToastContext";
 import { useNetworkContext } from "../context/NetworkContext";
+import { buildTxXdr } from "../utils/txDescriptors";
+import { notification } from "../utils/haptics";
 
 // ---------------------------------------------------------------------------
 // Types for the Soroban RPC responses we care about
@@ -111,20 +113,24 @@ async function pollTransaction(
 /**
  * useSubmitTx
  *
- * Returns a `submitTx(txXdr)` function that:
- *   1. Asks the connected wallet SDK to sign the provided XDR.
- *   2. Broadcasts the signed XDR via the Soroban RPC sendTransaction endpoint.
- *   3. Polls getTransaction until the chain confirms or a 30 s timeout elapses.
- *   4. Returns the real transaction hash.
+ * Returns a `submitTx(txDescriptor)` function that:
+ *   1. Converts the descriptor into genuine base64 XDR via the SDK's
+ *      simulate-and-assemble pipeline (#1591 — callers used to hand this hook
+ *      a plain string and it was signed as if it were XDR).
+ *   2. Asks the connected wallet SDK to sign that XDR.
+ *   3. Broadcasts the signed XDR via the Soroban RPC sendTransaction endpoint.
+ *   4. Polls getTransaction until the chain confirms or a 30 s timeout elapses.
+ *   5. Returns the real transaction hash.
  *
- * Toasts are shown for pending / success / error states.
+ * The wallet only ever receives real XDR, and the hook only reports success for
+ * a hash the network returned. Toasts are shown for pending / success / error.
  */
 export function useSubmitTx() {
   const { showPending, showSuccess, showError } = useToast();
-  const { rpcUrl } = useNetworkContext();
+  const { rpcUrl, contractId, network } = useNetworkContext();
 
   const submitTx = useCallback(
-    async (txXdr: string): Promise<string> => {
+    async (txDescriptor: string): Promise<string> => {
       showPending();
 
       try {
@@ -144,6 +150,18 @@ export function useSubmitTx() {
         if (!walletKit) {
           throw new Error("No wallet connected. Please connect your wallet first.");
         }
+
+        // ------------------------------------------------------------------
+        // Descriptor → real, simulated XDR
+        // ------------------------------------------------------------------
+
+        // Throws for an unknown method or a malformed descriptor, so a signing
+        // path can never be handed something that is not a real transaction.
+        const txXdr = await buildTxXdr(txDescriptor, {
+          contractId,
+          rpcUrl,
+          network: network.id,
+        });
 
         // ------------------------------------------------------------------
         // Sign + broadcast
@@ -184,12 +202,13 @@ export function useSubmitTx() {
         showSuccess(submission.hash);
         return submission.hash;
       } catch (err) {
+        void notification("error");
         const msg = err instanceof Error ? err.message : "Failed to submit transaction";
         showError(msg);
         throw err;
       }
     },
-    [showPending, showSuccess, showError, rpcUrl]
+    [showPending, showSuccess, showError, rpcUrl, contractId, network.id]
   );
 
   return submitTx;

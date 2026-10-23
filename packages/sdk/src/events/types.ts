@@ -69,6 +69,11 @@ export type PoolDepositEvent = BaseLinkoraEvent &
 export type PoolWithdrawEvent = BaseLinkoraEvent &
   Omit<Gen.PoolWithdrawEvent, "type"> & { type: "pool_withdraw" };
 
+export type WithdrawalSlippageExceededEvent = BaseLinkoraEvent &
+  Omit<Gen.WithdrawalSlippageExceededEvent, "type"> & {
+    type: "withdrawal_slippage_exceeded";
+  };
+
 export type PoolCreatedEvent = BaseLinkoraEvent &
   Omit<Gen.PoolCreatedEvent, "type"> & { type: "pool_created" };
 
@@ -132,6 +137,10 @@ export type GovProposalVetoedEvent = BaseLinkoraEvent &
 
 export type EmergencyBypassEvent = BaseLinkoraEvent &
   Omit<Gen.EmergencyBypassEvent, "type"> & { type: "emergency_bypass" };
+export type PostCommittedEvent = BaseLinkoraEvent &
+  Omit<Gen.PostCommittedEvent, "type"> & { type: "post_committed" };
+export type PostRevealedEvent = BaseLinkoraEvent &
+  Omit<Gen.PostRevealedEvent, "type"> & { type: "post_revealed" };
 
 export interface AttestationVerifiedEvent extends BaseLinkoraEvent {
   type: "attestation_verified";
@@ -172,6 +181,7 @@ export type LinkoraEvent =
   | TipEvent
   | PoolDepositEvent
   | PoolWithdrawEvent
+  | WithdrawalSlippageExceededEvent
   | PoolCreatedEvent
   | LikePostEvent
   | ContractUpgradedEvent
@@ -192,6 +202,8 @@ export type LinkoraEvent =
   | GovProposalExecutedEvent
   | GovProposalVetoedEvent
   | EmergencyBypassEvent
+  | PostCommittedEvent
+  | PostRevealedEvent
   | AttestationVerifiedEvent
   | PostReportedEvent
   | PostRemovedByModerationEvent
@@ -227,6 +239,8 @@ const EVENT_NAMES: Record<string, LinkoraEvent["type"]> = {
   PoolWithdrawEvent: "pool_withdraw",
   withdraw: "pool_withdraw",
   pool_withdraw: "pool_withdraw",
+  WithdrawalSlippageExceededEvent: "withdrawal_slippage_exceeded",
+  withdrawal_slippage_exceeded: "withdrawal_slippage_exceeded",
   PoolCreatedEvent: "pool_created",
   pool_created: "pool_created",
   ContractUpgraded: "contract_upgraded",
@@ -263,6 +277,10 @@ const EVENT_NAMES: Record<string, LinkoraEvent["type"]> = {
   gov_proposal_vetoed: "gov_proposal_vetoed",
   EmergencyBypassEvent: "emergency_bypass",
   emergency_bypass: "emergency_bypass",
+  PostCommittedEvent: "post_committed",
+  post_committed: "post_committed",
+  PostRevealedEvent: "post_revealed",
+  post_revealed: "post_revealed",
   AttestationVerifiedEvent: "attestation_verified",
   attestation_verified: "attestation_verified",
   PostReportedEvent: "post_reported",
@@ -470,6 +488,15 @@ export function parseContractEvent(raw: SorobanEvent, tokenFactoryId?: string): 
           amount: big(payload.amount),
           meta: eventMeta,
         };
+      case "withdrawal_slippage_exceeded":
+        return {
+          type: eventType,
+          pool_id: str(payload.pool_id),
+          requested_amount: big(payload.requested_amount),
+          received_amount: big(payload.received_amount),
+          min_out_amount: big(payload.min_out_amount),
+          meta: eventMeta,
+        };
       case "pool_created":
         return {
           type: eventType,
@@ -631,6 +658,25 @@ export function parseContractEvent(raw: SorobanEvent, tokenFactoryId?: string): 
           type: eventType,
           post_id: big(payload.post_id),
           reporter: str(payload.reporter),
+          meta: eventMeta,
+        };
+      case "post_committed":
+        return {
+          type: eventType,
+          version: num(payload.version),
+          post_id: big(payload.post_id),
+          author: str(payload.author),
+          content_hash: payload.content_hash as Uint8Array,
+          reveal_time: big(payload.reveal_time),
+          meta: eventMeta,
+        };
+      case "post_revealed":
+        return {
+          type: eventType,
+          version: num(payload.version),
+          post_id: big(payload.post_id),
+          author: str(payload.author),
+          content_hash: payload.content_hash as Uint8Array,
           meta: eventMeta,
         };
       default:

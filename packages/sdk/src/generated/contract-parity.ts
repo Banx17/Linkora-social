@@ -64,6 +64,9 @@ export const CONTRACT_FUNCTION_MAP: Readonly<Record<string, string>> = {
   getRentRateBps: "get_rent_rate_bps",
   getReportCount: "get_report_count",
   getReport: "get_report",
+  commitPost: "commit_post",
+  revealPost: "reveal_post",
+  getCommittedPost: "get_committed_post",
 } as const;
 
 /**
@@ -86,6 +89,7 @@ export const CONTRACT_EVENT_MAP: Readonly<Record<string, string>> = {
   PoolDepositEvent: "PoolDepositEvent",
   PostCreatedEvent: "PostCreatedEvent",
   PoolWithdrawEvent: "PoolWithdrawEvent",
+  WithdrawalSlippageExceededEvent: "WithdrawalSlippageExceededEvent",
   DmKeyPublishedEvent: "DmKeyPublishedEvent",
   PoolAdminAddedEvent: "PoolAdminAddedEvent",
   ProposalSignedEvent: "ProposalSignedEvent",
@@ -98,4 +102,6 @@ export const CONTRACT_EVENT_MAP: Readonly<Record<string, string>> = {
   GovProposalCreatedEvent: "GovProposalCreatedEvent",
   GovProposalExecutedEvent: "GovProposalExecutedEvent",
   PoolThresholdUpdatedEvent: "PoolThresholdUpdatedEvent",
+  PostCommittedEvent: "PostCommittedEvent",
+  PostRevealedEvent: "PostRevealedEvent",
 } as const;

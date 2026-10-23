@@ -1,94 +1,131 @@
-import { TextEncoder, TextDecoder } from "util";
+import { fetchPools, fetchIsPaused, createTtlCache } from './api';
+import { LinkoraClient } from '../../../../packages/sdk/src/client';
 
-// The SDK's generated client pulls in @stellar/stellar-base which requires the
-// global TextEncoder/TextDecoder in a JSDOM environment.
-(globalThis as any).TextEncoder = (globalThis as any).TextEncoder || TextEncoder;
-(globalThis as any).TextDecoder = (globalThis as any).TextDecoder || TextDecoder;
-
-// api.ts imports the SDK client directly for fetchIsPaused; stub it so the
-// heavy @stellar/stellar-base chain isn't loaded in this unit test.
-jest.mock("../../../../packages/sdk/src/client", () => ({
+jest.mock('../../../../packages/sdk/src/client', () => ({
   LinkoraClient: jest.fn(),
 }));
 
-import { createTtlCache } from "./api";
+const mockFetch = jest.fn();
 
-describe("createTtlCache (creator-token price cache, #1208)", () => {
-  beforeEach(() => {
-    jest.useFakeTimers();
+beforeEach(() => {
+  global.fetch = mockFetch as unknown as typeof fetch;
+  mockFetch.mockReset();
+});
+
+function jsonResponse(body: unknown, init: Partial<{ ok: boolean; status: number; statusText: string }> = {}) {
+  const { ok = true, status = 200, statusText = 'OK' } = init;
+  return { ok, status, statusText, json: async () => body };
+}
+
+describe('fetchPools', () => {
+  it('throws a descriptive error when the indexer returns a non-ok response', async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse({}, { ok: false, status: 500, statusText: 'Internal Server Error' })
+    );
+
+    await expect(fetchPools()).rejects.toThrow('Indexer returned 500: Internal Server Error');
   });
 
-  afterEach(() => {
-    jest.useRealTimers();
-    jest.clearAllMocks();
+  it('propagates network failures instead of masking them as an empty pool list', async () => {
+    mockFetch.mockRejectedValue(new Error('Network error'));
+
+    await expect(fetchPools()).rejects.toThrow('Network error');
   });
 
-  it("reuses the cached value for repeated reads within the TTL (single loader call)", async () => {
-    const load = jest.fn().mockResolvedValue({ price: "1.25", volume24h: "5000" });
-    const cache = createTtlCache<{ price: string; volume24h: string }>({
-      load,
-      ttlMs: 60_000,
-    });
+  it('maps the indexer pool payload into PoolData', async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        pools: [
+          { pool_id: '7', token: 'XLM', balance: '1000', admins: ['GALICE', 'GBOB'], threshold: 2 },
+        ],
+      })
+    );
 
-    const first = await cache.get();
-    const second = await cache.get();
-    const third = await cache.get();
+    await expect(fetchPools()).resolves.toEqual([
+      { id: '7', token: 'XLM', balance: 1000n, adminCount: 2, threshold: 2 },
+    ]);
+  });
 
-    expect(first).toEqual({ price: "1.25", volume24h: "5000" });
-    expect(second).toBe(first); // same cached object, not a fresh call
-    expect(third).toBe(first);
+  it('accepts a bare array response and falls back to zero balance/admin defaults', async () => {
+    mockFetch.mockResolvedValue(jsonResponse([{ id: '9', token: 'USDC' }]));
+
+    await expect(fetchPools()).resolves.toEqual([
+      { id: '9', token: 'USDC', balance: 0n, adminCount: 0, threshold: 1 },
+    ]);
+  });
+
+  it('returns an empty list when the indexer has no pools', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ pools: [] }));
+
+    await expect(fetchPools()).resolves.toEqual([]);
+  });
+});
+
+describe('createTtlCache', () => {
+  it('invokes the loader once for reads inside the TTL window', async () => {
+    const load = jest.fn().mockResolvedValue('value');
+    const cache = createTtlCache({ load, ttlMs: 10_000 });
+
+    await expect(cache.get()).resolves.toBe('value');
+    await expect(cache.get()).resolves.toBe('value');
+
     expect(load).toHaveBeenCalledTimes(1);
   });
 
-  it("refetches after the TTL expires", async () => {
-    const load = jest
-      .fn()
-      .mockResolvedValueOnce({ price: "1.25", volume24h: "5000" })
-      .mockResolvedValueOnce({ price: "1.40", volume24h: "6200" });
-    const cache = createTtlCache<{ price: string; volume24h: string }>({
-      load,
-      ttlMs: 60_000,
-    });
+  it('deduplicates concurrent reads into a single loader call', async () => {
+    const load = jest.fn().mockResolvedValue('value');
+    const cache = createTtlCache({ load, ttlMs: 10_000 });
 
-    const first = await cache.get();
+    await expect(Promise.all([cache.get(), cache.get()])).resolves.toEqual(['value', 'value']);
+    expect(load).toHaveBeenCalledTimes(1);
+  });
 
-    jest.advanceTimersByTime(60_001);
+  it('refetches once the TTL has expired', async () => {
+    const load = jest.fn().mockResolvedValueOnce('first').mockResolvedValueOnce('second');
+    const cache = createTtlCache({ load, ttlMs: 0 });
 
-    const second = await cache.get();
-
-    expect(first.price).toBe("1.25");
-    expect(second.price).toBe("1.40");
+    await expect(cache.get()).resolves.toBe('first');
+    await expect(cache.get()).resolves.toBe('second');
     expect(load).toHaveBeenCalledTimes(2);
   });
 
-  it("deduplicates concurrent calls into a single in-flight request", async () => {
-    const load = jest.fn().mockResolvedValue({ price: "2.00", volume24h: "100" });
-    const cache = createTtlCache<{ price: string; volume24h: string }>({
-      load,
-      ttlMs: 60_000,
-    });
-
-    const [a, b] = await Promise.all([cache.get(), cache.get()]);
-
-    expect(a).toBe(b);
-    expect(load).toHaveBeenCalledTimes(1);
-  });
-
-  it("invalidates the cache so the next read refetches", async () => {
-    const load = jest
-      .fn()
-      .mockResolvedValueOnce({ price: "1.00", volume24h: "10" })
-      .mockResolvedValueOnce({ price: "3.00", volume24h: "30" });
-    const cache = createTtlCache<{ price: string; volume24h: string }>({
-      load,
-      ttlMs: 60_000,
-    });
+  it('refetches immediately after invalidate()', async () => {
+    const load = jest.fn().mockResolvedValueOnce('first').mockResolvedValueOnce('second');
+    const cache = createTtlCache({ load, ttlMs: 10_000 });
 
     await cache.get();
     cache.invalidate();
-    const second = await cache.get();
-
-    expect(second.price).toBe("3.00");
+    await expect(cache.get()).resolves.toBe('second');
     expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not cache a rejected load and lets the next read retry', async () => {
+    const load = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce('recovered');
+    const cache = createTtlCache({ load, ttlMs: 10_000 });
+
+    await expect(cache.get()).rejects.toThrow('boom');
+    await expect(cache.get()).resolves.toBe('recovered');
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('fetchIsPaused', () => {
+  it('reports the contract pause state', async () => {
+    (LinkoraClient as unknown as jest.Mock).mockImplementationOnce(() => ({
+      isPaused: jest.fn().mockResolvedValue(true),
+    }));
+
+    await expect(fetchIsPaused()).resolves.toBe(true);
+  });
+
+  it('fails open when the RPC cannot be reached', async () => {
+    (LinkoraClient as unknown as jest.Mock).mockImplementationOnce(() => ({
+      isPaused: jest.fn().mockRejectedValue(new Error("ECONNREFUSED")),
+    }));
+
+    await expect(fetchIsPaused()).resolves.toBe(false);
   });
 });

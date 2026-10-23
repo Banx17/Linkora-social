@@ -7,7 +7,10 @@
  * in db.ts rather than a re-description of it.
  */
 
+import type * as SQLite from "expo-sqlite";
+
 type Row = Record<string, unknown>;
+type BindParams = SQLite.SQLiteBindParams;
 
 export function createFakeDb() {
   const dmMessages = new Map<string, Row>();
@@ -55,11 +58,15 @@ export function createFakeDb() {
       await fn();
     }),
 
-    runAsync: jest.fn(async (sql: string, params: unknown[] = []) => {
+    runAsync: jest.fn(async (sql: string, params: BindParams = []) => {
+      // Normalise both array-style and object-style params to a plain array
+      // for the pattern-matched logic below. The fake only receives positional
+      // (array) params from db.ts, so this cast is safe for our use-cases.
+      const p: unknown[] = Array.isArray(params) ? params : Object.values(params);
       if (sql.includes("INSERT INTO cached_posts") && sql.includes("ON CONFLICT(id) DO UPDATE")) {
-        // Multi-row upsert: params arrive in chunks of 9 —
+        // Multi-row upsert: p arrive in chunks of 9 —
         // (id, author, username, content, tip_total, timestamp, like_count, has_liked, created_at).
-        for (let i = 0; i < params.length; i += 9) {
+        for (let i = 0; i < p.length; i += 9) {
           const [
             id,
             author,
@@ -70,7 +77,7 @@ export function createFakeDb() {
             like_count,
             has_liked,
             created_at,
-          ] = params.slice(i, i + 9) as [
+          ] = p.slice(i, i + 9) as [
             string,
             string,
             string,
@@ -99,7 +106,7 @@ export function createFakeDb() {
       }
 
       if (sql.includes("INSERT INTO cached_posts") && sql.includes("'pending'")) {
-        const [id, author, username, content, timestamp, created_at] = params as [
+        const [id, author, username, content, timestamp, created_at] = p as [
           string,
           string,
           string,
@@ -125,7 +132,7 @@ export function createFakeDb() {
       // A plain single-row 'synced' insert (no ON CONFLICT), used by migration
       // tests to seed a row in a specific state.
       if (sql.includes("INSERT INTO cached_posts") && sql.includes("'synced'")) {
-        const [id, author, username, content, timestamp, created_at] = params as [
+        const [id, author, username, content, timestamp, created_at] = p as [
           string,
           string,
           string,
@@ -152,10 +159,10 @@ export function createFakeDb() {
         sql.includes("DELETE FROM cached_posts") &&
         sql.includes("sync_status IN ('pending', 'failed')")
       ) {
-        // Batched conflict-resolution delete: params arrive in triples of (author, content, id).
+        // Batched conflict-resolution delete: p arrive in triples of (author, content, id).
         const triples: Array<[string, string, string]> = [];
-        for (let i = 0; i < params.length; i += 3) {
-          triples.push(params.slice(i, i + 3) as [string, string, string]);
+        for (let i = 0; i < p.length; i += 3) {
+          triples.push(p.slice(i, i + 3) as [string, string, string]);
         }
         for (const [key, row] of cachedPosts) {
           if (row.sync_status !== "pending" && row.sync_status !== "failed") continue;
@@ -169,11 +176,8 @@ export function createFakeDb() {
       }
 
       // Row-count cap: keep the `LIMIT ?` newest synced rows by timestamp.
-      if (
-        sql.includes("DELETE FROM cached_posts") &&
-        /ORDER\s+BY\s+timestamp\s+DESC/.test(sql)
-      ) {
-        const [maxRows] = params as [number];
+      if (sql.includes("DELETE FROM cached_posts") && /ORDER\s+BY\s+timestamp\s+DESC/.test(sql)) {
+        const [maxRows] = p as [number];
         const synced = Array.from(cachedPosts.entries())
           .filter(([, row]) => row.sync_status === "synced")
           .sort((a, b) => Number(b[1].timestamp) - Number(a[1].timestamp));
@@ -187,7 +191,7 @@ export function createFakeDb() {
         sql.includes("DELETE FROM cached_posts") &&
         /\bsync_status\s*=\s*'synced'\s+AND\s+id\s+NOT\s+IN\b/.test(sql)
       ) {
-        const keepIds = new Set(params as string[]);
+        const keepIds = new Set(p as string[]);
         for (const [key, row] of cachedPosts) {
           if (row.sync_status === "synced" && !keepIds.has(row.id as string)) {
             cachedPosts.delete(key);
@@ -197,7 +201,7 @@ export function createFakeDb() {
       }
 
       if (sql.includes("UPDATE cached_posts SET sync_status = 'failed'")) {
-        const [id] = params as [string];
+        const [id] = p as [string];
         const row = cachedPosts.get(id);
         if (row) row.sync_status = "failed";
         return;
@@ -207,7 +211,7 @@ export function createFakeDb() {
       // ledger sequence are restored to the real wall-clock second they were
       // synced at.
       if (sql.includes("UPDATE cached_posts SET timestamp = created_at WHERE timestamp <")) {
-        const [threshold] = params as [number];
+        const [threshold] = p as [number];
         for (const row of cachedPosts.values()) {
           if (Number(row.timestamp) < threshold) row.timestamp = row.created_at;
         }
@@ -218,7 +222,7 @@ export function createFakeDb() {
         sql.includes("DELETE FROM cached_posts") &&
         /\bsync_status\s*=\s*'synced'\s+AND\s+timestamp\s*</.test(sql)
       ) {
-        const [cutoff] = params as [number];
+        const [cutoff] = p as [number];
         for (const [key, row] of cachedPosts) {
           if (row.sync_status === "synced" && Number(row.timestamp) < cutoff) {
             cachedPosts.delete(key);
@@ -228,7 +232,7 @@ export function createFakeDb() {
       }
 
       if (sql.includes("UPDATE cached_posts SET id = ?")) {
-        const [realId, localId] = params as [string, string];
+        const [realId, localId] = p as [string, string];
         const row = cachedPosts.get(localId);
         if (row) {
           cachedPosts.delete(localId);
@@ -238,7 +242,7 @@ export function createFakeDb() {
       }
 
       if (sql.includes("DELETE FROM cached_posts WHERE id = ?")) {
-        const [id] = params as [string];
+        const [id] = p as [string];
         cachedPosts.delete(id);
         return;
       }
@@ -253,7 +257,7 @@ export function createFakeDb() {
           ciphertext_hash,
           timestamp,
           created_at,
-        ] = params as [string, string, string, string, string, string, number, number];
+        ] = p as [string, string, string, string, string, string, number, number];
         const existing = dmMessages.get(id);
         dmMessages.set(id, {
           id,
@@ -280,7 +284,7 @@ export function createFakeDb() {
           ciphertext_hash,
           timestamp,
           created_at,
-        ] = params as [string, string, string, string, string, string, number, number];
+        ] = p as [string, string, string, string, string, string, number, number];
         dmMessages.set(id, {
           id,
           conversation_id,
@@ -297,7 +301,7 @@ export function createFakeDb() {
       }
 
       if (sql.includes("DELETE FROM dm_messages") && sql.includes("ciphertext_hash = ?")) {
-        const [conversation_id, ciphertext_hash, id] = params as [string, string, string];
+        const [conversation_id, ciphertext_hash, id] = p as [string, string, string];
         for (const [key, row] of dmMessages) {
           if (
             row.conversation_id === conversation_id &&
@@ -312,7 +316,7 @@ export function createFakeDb() {
       }
 
       if (sql.includes("UPDATE dm_messages SET sync_status = 'failed'")) {
-        const [error_message, id] = params as [string, string];
+        const [error_message, id] = p as [string, string];
         const row = dmMessages.get(id);
         if (row) {
           row.sync_status = "failed";
@@ -322,7 +326,7 @@ export function createFakeDb() {
       }
 
       if (sql.includes("INSERT INTO dm_sync_state") && sql.includes("sync_cursor = MAX")) {
-        const [conversation_id, cursor] = params as [string, number];
+        const [conversation_id, cursor] = p as [string, number];
         const existing = dmSyncState.get(conversation_id) ?? { sync_cursor: 0, last_read: 0 };
         dmSyncState.set(conversation_id, {
           sync_cursor: Math.max(existing.sync_cursor, cursor),
@@ -332,7 +336,7 @@ export function createFakeDb() {
       }
 
       if (sql.includes("INSERT INTO dm_sync_state") && sql.includes("last_read = MAX")) {
-        const [conversation_id, timestamp] = params as [string, number];
+        const [conversation_id, timestamp] = p as [string, number];
         const existing = dmSyncState.get(conversation_id) ?? { sync_cursor: 0, last_read: 0 };
         dmSyncState.set(conversation_id, {
           sync_cursor: existing.sync_cursor,

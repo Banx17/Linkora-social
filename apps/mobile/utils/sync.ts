@@ -29,9 +29,7 @@ function shortAddress(address: string): string {
 const LEDGER_CLOSE_SECONDS = 5;
 
 /** Unix timestamp of Stellar network genesis (2015-09-01T00:00:00Z). */
-const STELLAR_GENESIS_UNIX_SECONDS = Math.floor(
-  new Date("2015-09-01T00:00:00Z").getTime() / 1000
-);
+const STELLAR_GENESIS_UNIX_SECONDS = Math.floor(new Date("2015-09-01T00:00:00Z").getTime() / 1000);
 
 /**
  * Convert a Stellar *ledger sequence number* into seconds since the Unix epoch.
@@ -128,6 +126,41 @@ function normalizeIndexerPosts(raw: unknown): IndexerPost[] {
 }
 
 /**
+ * Maps indexer rows to the app's cached-post shape.
+ *
+ * Reuses content/username already in SQLite when the indexer omits them, so a
+ * refresh never blanks out a post body that was cached earlier.
+ */
+async function toCachedPosts(indexerPosts: IndexerPost[]): Promise<Post[]> {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  // A single batched lookup replaces one `getCachedPostById` call per post.
+  const cachedById = await getCachedPostsByIds(indexerPosts.map((ip) => ip.id));
+
+  return indexerPosts.map((ip) => {
+    const cached = cachedById.get(ip.id);
+    let content = cached?.content;
+    let username = cached?.username || "stellar_user";
+
+    if (!content) {
+      content = ip.content ?? "Content unavailable offline";
+      username = ip.username ?? shortAddress(ip.author);
+    }
+
+    return {
+      id: ip.id,
+      author: ip.author,
+      username,
+      content,
+      tip_total: ip.tipTotal,
+      // createdLedger is a sequence number, never a timestamp — convert here.
+      timestamp: indexerPostTimestamp(ip, nowSeconds),
+      like_count: ip.likeCount,
+      has_liked: ip.hasLiked,
+    };
+  });
+}
+
+/**
  * Fetches posts from the indexer and reconciles them with the local SQLite cache.
  * Falls back to placeholder content/username when the indexer doesn't provide them
  * and the post isn't already cached.
@@ -136,7 +169,11 @@ function normalizeIndexerPosts(raw: unknown): IndexerPost[] {
  * @param offset Starting position for pagination
  * @param evictStale Whether to evict synced posts not in the current page (false during pagination)
  */
-export async function fetchAndCachePosts(limit: number, offset: number, evictStale: boolean = true): Promise<Post[]> {
+export async function fetchAndCachePosts(
+  limit: number,
+  offset: number,
+  evictStale: boolean = true
+): Promise<Post[]> {
   const indexerUrl = getIndexerBaseUrl();
 
   // 1. Fetch posts from the indexer
@@ -147,38 +184,46 @@ export async function fetchAndCachePosts(limit: number, offset: number, evictSta
 
   const data = await res.json();
   const indexerPosts = normalizeIndexerPosts(data.posts);
-  const finalPosts: Post[] = [];
-  const nowSeconds = Math.floor(Date.now() / 1000);
 
-  // 2. Fetch content/profile details for each post, using local cache as much as possible.
-  // A single batched lookup replaces one `getCachedPostById` call per post.
-  const cachedById = await getCachedPostsByIds(indexerPosts.map((ip) => ip.id));
-
-  for (const ip of indexerPosts) {
-    const cached = cachedById.get(ip.id);
-    let content = cached?.content;
-    let username = cached?.username || "stellar_user";
-
-    if (!content) {
-      content = ip.content ?? "Content unavailable offline";
-      username = ip.username ?? shortAddress(ip.author);
-    }
-
-    finalPosts.push({
-      id: ip.id,
-      author: ip.author,
-      username,
-      content,
-      tip_total: ip.tipTotal,
-      // createdLedger is a sequence number, never a timestamp — convert here.
-      timestamp: indexerPostTimestamp(ip, nowSeconds),
-      like_count: ip.likeCount,
-      has_liked: ip.hasLiked,
-    });
-  }
+  // 2. Map to the cached-post shape, reusing local content where possible.
+  const finalPosts = await toCachedPosts(indexerPosts);
 
   // 3. Reconcile with SQLite cache
   await reconcilePosts(finalPosts, evictStale);
+
+  return finalPosts;
+}
+
+/** Page size used by the author-scoped query (#1595). */
+export const AUTHOR_POSTS_PAGE_SIZE = 10;
+
+/**
+ * Fetches a single author's posts directly from the indexer (#1595).
+ *
+ * The profile screen used to call `useFeed()` and filter the whole loaded feed
+ * client-side, which over-fetched every post and hid any of the author's posts
+ * that were not inside the current feed page. `evictStale` is always false: an
+ * author page must not evict the main feed's cached rows.
+ */
+export async function fetchAuthorPosts(
+  author: string,
+  limit: number = AUTHOR_POSTS_PAGE_SIZE,
+  offset: number = 0
+): Promise<Post[]> {
+  if (!author) return [];
+
+  const indexerUrl = getIndexerBaseUrl();
+  const res = await fetch(
+    `${indexerUrl}/api/posts?author=${encodeURIComponent(author)}&limit=${limit}&offset=${offset}`
+  );
+  if (!res.ok) {
+    throw new Error("Failed to fetch author posts from indexer");
+  }
+
+  const data = await res.json();
+  const finalPosts = await toCachedPosts(normalizeIndexerPosts(data.posts));
+
+  await reconcilePosts(finalPosts, false);
 
   return finalPosts;
 }

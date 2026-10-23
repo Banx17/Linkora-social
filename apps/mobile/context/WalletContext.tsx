@@ -2,6 +2,8 @@ import React, {
   createContext,
   useContext,
   useEffect,
+  useMemo,
+  useRef,
   useState,
   useCallback,
   ReactNode,
@@ -14,9 +16,15 @@ import {
   setConnectionState,
   getConnectionState,
   deleteConnectionState,
+  type ConnectionState as StoredConnectionState,
 } from "../utils/secureStorage";
 import { deregisterTokenFromIndexer } from "../notifications/registerForPushNotifications";
-import { useNetworkContext, type NetworkPreset, type StellarNetworkId } from "./NetworkContext";
+import {
+  useNetworkContext,
+  NETWORK_PRESETS,
+  type NetworkPreset,
+  type StellarNetworkId,
+} from "./NetworkContext";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -34,17 +42,40 @@ export interface WalletInfo {
   provider: WalletProviderKind | null;
 }
 
-interface StoredConnectionState {
-  connected: boolean;
-  address: string;
-  timestamp: number;
+/**
+ * Stellar ed25519 public keys are `G` followed by 55 base32 characters.
+ */
+const STELLAR_ADDRESS_PATTERN = /^G[A-Z2-7]{55}$/;
+
+const EMPTY_WALLET: WalletInfo = { address: null, network: null, provider: null };
+
+function isStellarAddress(value: unknown): value is string {
+  return typeof value === "string" && STELLAR_ADDRESS_PATTERN.test(value.trim());
 }
+
+/** #1593 — a persisted network is only trustworthy when it is a known preset. */
+function isKnownNetwork(value: unknown): value is StellarNetworkId {
+  return typeof value === "string" && value in NETWORK_PRESETS;
+}
+
+/**
+ * Outcome of asking one adapter whether a persisted session is still usable.
+ *
+ * "invalid" is the only state allowed to delete stored credentials (#1593):
+ * "unverifiable" means the adapter could not be asked (kit not initialised yet,
+ * extension unavailable) and must leave the session on disk to be retried.
+ */
+type SessionProbe =
+  | { status: "restored"; address: string }
+  | { status: "invalid" }
+  | { status: "unverifiable" };
 
 interface WalletConnectLike {
   connect: (network: NetworkPreset) => Promise<{ publicKey?: string; address?: string }>;
   disconnect: () => Promise<void>;
   getPublicKey?: () => Promise<string>;
   isConnected?: () => Promise<boolean>;
+  connectWithUri?: (uri: string, network: NetworkPreset) => Promise<{ publicKey?: string; address?: string }>;
   signTransaction?: (payload: { txXdr: string }) => Promise<WalletSignResult>;
   signAndSubmitTransaction?: (payload: {
     txXdr: string;
@@ -75,6 +106,8 @@ type WalletConnectRequestArgs = {
 
 type LinkoraGlobal = typeof globalThis & {
   __LINKORA_WALLET_KIT__?: WalletConnectLike;
+  /** #1593 — allows tests (and the mini-app bridge) to inject a Freighter API. */
+  __LINKORA_FREIGHTER_API__?: Record<string, unknown>;
 };
 
 async function createWalletConnectAdapter(): Promise<WalletConnectLike> {
@@ -127,6 +160,30 @@ async function createWalletConnectAdapter(): Promise<WalletConnectLike> {
       if (!currentAddress) throw new Error("No Stellar account returned from WalletConnect");
 
       return { publicKey: currentAddress };
+    },
+
+    async connectWithUri(uri: string, network: NetworkPreset) {
+      if (!projectId) throw new Error("WalletConnect project id not configured");
+      client = client ?? (await SignClient.init({
+        projectId,
+        metadata: { name: "Linkora", description: "Linkora SocialFi mobile app", url: "https://linkora.social", icons: [] },
+      }));
+      if (!uri.startsWith("wc:")) throw new Error("Invalid WalletConnect pairing URI");
+      await client.pair({ uri });
+      const deadline = Date.now() + 120000;
+      while (Date.now() < deadline) {
+        const sessions = client.session.getAll();
+        const session = sessions[sessions.length - 1];
+        const account = session?.namespaces.stellar?.accounts?.[0]?.split(":").pop();
+        if (session && account) {
+          topic = session.topic;
+          currentAddress = account;
+          connectedNetwork = network;
+          return { publicKey: account };
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      throw new Error("WalletConnect pairing timed out");
     },
 
     async disconnect() {
@@ -209,6 +266,9 @@ async function createWalletConnectAdapter(): Promise<WalletConnectLike> {
 declare global {
   // eslint-disable-next-line no-var
   var __LINKORA_WALLET_KIT__: WalletConnectLike | undefined;
+  /** #1593 — test/bridge seam for the Freighter API (the extension is injected in prod). */
+  // eslint-disable-next-line no-var
+  var __LINKORA_FREIGHTER_API__: Record<string, unknown> | undefined;
 }
 
 export interface WalletContextType {
@@ -217,9 +277,9 @@ export interface WalletContextType {
   network: WalletNetwork;
   error: string | null;
   connect: (provider?: WalletProviderKind) => Promise<void>;
+  connectWithPairingUri: (uri: string) => Promise<void>;
   disconnect: () => Promise<void>;
   refresh: () => Promise<void>;
-  setNetwork: (network: WalletNetwork) => void;
 }
 
 const WalletContext = createContext<WalletContextType | null>(null);
@@ -227,17 +287,44 @@ const WalletContext = createContext<WalletContextType | null>(null);
 export function WalletProvider({ children }: { children: ReactNode }): JSX.Element {
   const { network: selectedNetwork } = useNetworkContext();
   const [state, setState] = useState<WalletState>("loading");
-  const [network, setNetwork] = useState<WalletNetwork>("TESTNET");
-  const [wallet, setWallet] = useState<WalletInfo>({
-    address: null,
-    network: null,
-    provider: null,
-  });
+  const [wallet, setWallet] = useState<WalletInfo>(EMPTY_WALLET);
   const [error, setError] = useState<string | null>(null);
 
   const [walletKit, setWalletKit] = useState<WalletConnectLike | null>(
     () => globalThis.__LINKORA_WALLET_KIT__ ?? null
   );
+
+  // #1593 — a Stellar keypair is valid on any network, so a connected wallet
+  // operates on the network the app currently has selected. `network` used to be
+  // standalone state seeded with a hardcoded "TESTNET", so every consumer
+  // showing it went stale the moment the user switched networks in settings.
+  // The session's origin network stays on `wallet.network` (and in storage) as
+  // provenance for the persisted record.
+  const network: WalletNetwork = selectedNetwork.id;
+
+  // Read the selected network through a ref so switching networks does not
+  // re-run the restore below. A session is network-independent, and re-probing
+  // on every switch flashed "loading" and could drop an already-connected user
+  // whose adapter was momentarily unreachable.
+  const selectedNetworkIdRef = useRef(selectedNetwork.id);
+  useEffect(() => {
+    selectedNetworkIdRef.current = selectedNetwork.id;
+  });
+
+  const persistSession = useCallback(async (address: string, provider: WalletProviderKind) => {
+    const connState: StoredConnectionState = {
+      connected: true,
+      address,
+      provider,
+      network: selectedNetworkIdRef.current,
+      timestamp: Date.now(),
+    };
+    await Promise.all([setWalletAddress(address), setConnectionState(connState)]);
+  }, []);
+
+  const clearStoredSession = useCallback(async () => {
+    await Promise.all([deleteWalletAddress(), deleteConnectionState()]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -271,6 +358,9 @@ export function WalletProvider({ children }: { children: ReactNode }): JSX.Eleme
   }, []);
 
   const importFreighterApi = useCallback(async () => {
+    const injected = globalThis.__LINKORA_FREIGHTER_API__;
+    if (injected) return injected;
+
     const loader = new Function("specifier", "return import(specifier)") as (
       specifier: string
     ) => Promise<Record<string, unknown>>;
@@ -319,54 +409,205 @@ export function WalletProvider({ children }: { children: ReactNode }): JSX.Eleme
     throw new Error("No address returned from Freighter");
   }, [importFreighterApi]);
 
-  const checkConnectionState = useCallback(async () => {
-    if (!walletKit) return;
-
-    try {
-      setState("loading");
-      setError(null);
-
-      const storedAddress = await getWalletAddress();
-      const storedConn = await getConnectionState();
-
-      if (storedAddress && storedConn) {
-        const isConnected: boolean = walletKit.isConnected
-          ? await walletKit.isConnected()
-          : Boolean(storedAddress);
-
-        if (isConnected) {
-          const currentAddress: string = walletKit.getPublicKey
-            ? await walletKit.getPublicKey()
-            : storedAddress;
-
-          if (currentAddress === storedAddress) {
-            setWallet({
-              address: currentAddress,
-              network: selectedNetwork.id,
-              provider: "walletconnect",
-            });
-            setState("connected");
-            return;
-          }
-        }
-
-        await Promise.all([deleteWalletAddress(), deleteConnectionState()]);
+  /**
+   * #1593 — non-prompting Freighter check. Restore must never open the wallet's
+   * permission dialog (the old code called `requestAccess()` on every cold
+   * start), so this only reads state the extension already exposes.
+   */
+  const probeFreighterSession = useCallback(
+    async (storedAddress: string): Promise<SessionProbe> => {
+      let freighter: Record<string, unknown>;
+      try {
+        freighter = await importFreighterApi();
+      } catch {
+        // Extension not installed in this browser → cannot verify, keep session.
+        return { status: "unverifiable" };
       }
 
-      setState("disconnected");
-      setWallet({ address: null, network: null, provider: null });
-    } catch (err) {
-      setState("error");
-      setError(err instanceof Error ? err.message : "Unknown error");
-    }
-  }, [walletKit, selectedNetwork.id]);
+      try {
+        if (typeof freighter.isConnected === "function") {
+          const connected = await (freighter.isConnected as () => Promise<boolean>)();
+          if (connected === false) return { status: "invalid" };
+        }
 
+        const readPublicKey = async (): Promise<string | null> => {
+          if (typeof freighter.getPublicKey === "function") {
+            const value = await (freighter.getPublicKey as () => Promise<unknown>)();
+            if (typeof value === "string") return value;
+            if (value && typeof value === "object" && "address" in value) {
+              const address = (value as { address?: unknown }).address;
+              return typeof address === "string" ? address : null;
+            }
+          }
+          if (typeof freighter.getAddress === "function") {
+            const value = await (freighter.getAddress as () => Promise<unknown>)();
+            if (typeof value === "string") return value;
+            if (value && typeof value === "object" && "address" in value) {
+              const address = (value as { address?: unknown }).address;
+              return typeof address === "string" ? address : null;
+            }
+          }
+          return null;
+        };
+
+        const address = await readPublicKey();
+        if (!address || !isStellarAddress(address)) {
+          return { status: "unverifiable" };
+        }
+
+        // A different account is now active → this stored session is stale.
+        if (address !== storedAddress) return { status: "invalid" };
+
+        return { status: "restored", address };
+      } catch {
+        return { status: "unverifiable" };
+      }
+    },
+    [importFreighterApi]
+  );
+
+  const probeWalletConnectSession = useCallback(
+    async (storedAddress: string): Promise<SessionProbe> => {
+      // Kit not initialised yet: ask again later rather than wiping the session.
+      if (!walletKit) return { status: "unverifiable" };
+
+      try {
+        if (walletKit.isConnected) {
+          const connected = await walletKit.isConnected();
+          if (connected === false) return { status: "invalid" };
+        }
+
+        const address = walletKit.getPublicKey ? await walletKit.getPublicKey() : storedAddress;
+
+        if (!isStellarAddress(address)) return { status: "unverifiable" };
+        if (address !== storedAddress) return { status: "invalid" };
+
+        return { status: "restored", address };
+      } catch {
+        return { status: "unverifiable" };
+      }
+    },
+    [walletKit]
+  );
+
+  const checkConnectionState = useCallback(
+    async (signal?: AbortSignal) => {
+      try {
+        if (signal?.aborted) return;
+        setState("loading");
+        setError(null);
+
+        const [storedAddress, storedConn] = await Promise.all([
+          getWalletAddress(),
+          getConnectionState(),
+        ]);
+
+        if (signal?.aborted) return;
+
+        if (!storedAddress || !storedConn || !storedConn.connected) {
+          setWallet(EMPTY_WALLET);
+          setState("disconnected");
+          return;
+        }
+
+        // Corrupt/legacy address: nothing to restore, and it is genuinely invalid.
+        if (!isStellarAddress(storedAddress)) {
+          await clearStoredSession();
+          if (signal?.aborted) return;
+          setWallet(EMPTY_WALLET);
+          setState("disconnected");
+          return;
+        }
+
+        // Prefer the adapter recorded in the session; sessions written before
+        // #1593 have no provider, so probe both (cheapest/most likely first).
+        const candidates: WalletProviderKind[] = storedConn.provider
+          ? [storedConn.provider]
+          : ["freighter", "walletconnect"];
+
+        const results: Array<{ provider: WalletProviderKind; probe: SessionProbe }> = [];
+        for (const candidate of candidates) {
+          if (signal?.aborted) return;
+          const probe =
+            candidate === "freighter"
+              ? await probeFreighterSession(storedAddress)
+              : await probeWalletConnectSession(storedAddress);
+          results.push({ provider: candidate, probe });
+          if (probe.status === "restored") break;
+        }
+
+        if (signal?.aborted) return;
+
+        const match = results.find((result) => result.probe.status === "restored");
+        if (match && match.probe.status === "restored") {
+          const { address } = match.probe;
+          // A legacy record has no provider; record the one that matched so the
+          // next cold start probes it directly (and not the other adapter).
+          if (storedConn.provider !== match.provider) {
+            await persistSession(address, match.provider);
+          }
+          if (signal?.aborted) return;
+          setWallet({
+            address,
+            network: isKnownNetwork(storedConn.network)
+              ? storedConn.network
+              : selectedNetworkIdRef.current,
+            provider: match.provider,
+          });
+          setState("connected");
+          return;
+        }
+
+        // Only delete when every adapter we could ask said the session is gone.
+        // An "unverifiable" adapter means we simply could not tell yet.
+        const anyInvalid = results.some((result) => result.probe.status === "invalid");
+        const anyUnverifiable = results.some((result) => result.probe.status === "unverifiable");
+        if (anyInvalid && !anyUnverifiable) {
+          await clearStoredSession();
+        }
+
+        if (signal?.aborted) return;
+
+        setWallet(EMPTY_WALLET);
+        setState("disconnected");
+      } catch (err) {
+        if (signal?.aborted) return;
+        setState("error");
+        setError(err instanceof Error ? err.message : "Unknown error");
+      }
+    },
+    [clearStoredSession, persistSession, probeFreighterSession, probeWalletConnectSession]
+  );
+
+  // #1593 — run the restore on mount even before the WalletConnect kit is ready;
+  // a Freighter session does not depend on it, and a WalletConnect session is
+  // retried once `walletKit` arrives (its probe reports "unverifiable" until then).
+  // #1196 — use an AbortController so state setters are no-ops after unmount.
   useEffect(() => {
-    if (walletKit) checkConnectionState();
-  }, [walletKit, checkConnectionState]);
+    const controller = new AbortController();
+    checkConnectionState(controller.signal);
+    return () => {
+      controller.abort();
+    };
+  }, [checkConnectionState]);
+
+  // #1196 — guard all post-await state setters so that unmounting mid-connect
+  // does not cause state updates on an unmounted component. This must be a ref
+  // tied to the effect lifecycle: an async callback cannot return a cleanup
+  // function, so a local `mounted` flag was never set to false and the guard
+  // silently always passed.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const connect = useCallback(
     async (provider: WalletProviderKind = "walletconnect") => {
+      const guard = () => mountedRef.current;
+
       try {
         setState("connecting");
         setError(null);
@@ -387,63 +628,84 @@ export function WalletProvider({ children }: { children: ReactNode }): JSX.Eleme
           }
         }
 
-        if (!address) throw new Error("No address returned from wallet");
+        if (!guard()) return;
 
-        const connState: StoredConnectionState = {
-          connected: true,
-          address,
-          timestamp: Date.now(),
-        };
-        await Promise.all([setWalletAddress(address), setConnectionState(connState)]);
+        if (!address || !isStellarAddress(address)) {
+          throw new Error("No address returned from wallet");
+        }
+
+        await persistSession(address, provider);
+
+        if (!guard()) return;
 
         setWallet({ address, network: selectedNetwork.id, provider });
         setState("connected");
       } catch (err) {
+        if (!guard()) return;
         setState("error");
         setError(err instanceof Error ? err.message : "Connection failed");
-        setWallet({ address: null, network: null, provider: null });
+        setWallet(EMPTY_WALLET);
       }
     },
-    [requestFreighterAddress, selectedNetwork, walletKit]
+    [persistSession, requestFreighterAddress, selectedNetwork, walletKit]
   );
+
+  const connectWithPairingUri = useCallback(async (uri: string) => {
+    if (!walletKit?.connectWithUri) throw new Error("WalletConnect QR pairing is not available");
+    try {
+      setState("connecting");
+      setError(null);
+      const result = await walletKit.connectWithUri(uri, selectedNetwork);
+      const address = result.publicKey ?? result.address ?? (walletKit.getPublicKey ? await walletKit.getPublicKey() : null);
+      if (!address || !isStellarAddress(address)) throw new Error("WalletConnect returned no Stellar address");
+      await persistSession(address, "walletconnect");
+      setWallet({ address, network: selectedNetwork.id, provider: "walletconnect" });
+      setState("connected");
+    } catch (err) {
+      setState("error");
+      setError(err instanceof Error ? err.message : "WalletConnect QR pairing failed");
+      throw err;
+    }
+  }, [persistSession, selectedNetwork, walletKit]);
 
   const disconnect = useCallback(async () => {
     const currentAddress = wallet.address;
+    const currentProvider = wallet.provider;
     try {
       setError(null);
-      if (walletKit) await walletKit.disconnect();
+      // Only the WalletConnect adapter owns a remote session to tear down.
+      if (walletKit && currentProvider === "walletconnect") {
+        await walletKit.disconnect();
+      }
     } catch {
       // ignore
     } finally {
       if (currentAddress) {
         void deregisterTokenFromIndexer(currentAddress);
       }
-      await Promise.all([deleteWalletAddress(), deleteConnectionState()]);
-      setWallet({ address: null, network: null, provider: null });
+      await clearStoredSession();
+      setWallet(EMPTY_WALLET);
       setState("disconnected");
     }
-  }, [walletKit, wallet.address]);
+  }, [clearStoredSession, wallet.address, wallet.provider, walletKit]);
 
   const refresh = useCallback(async () => {
     await checkConnectionState();
   }, [checkConnectionState]);
 
-  useEffect(() => {
-    if (wallet.address) {
-      setWallet((current) => ({ ...current, network: selectedNetwork.id }));
-    }
-  }, [selectedNetwork.id, wallet.address]);
-
-  const value: WalletContextType = {
-    state,
-    wallet,
-    network,
-    error,
-    connect,
-    disconnect,
-    refresh,
-    setNetwork,
-  };
+  const value: WalletContextType = useMemo(
+    () => ({
+      state,
+      wallet,
+      network,
+      error,
+      connect,
+      connectWithPairingUri,
+      disconnect,
+      refresh,
+    }),
+    [state, wallet, network, error, connect, connectWithPairingUri, disconnect, refresh]
+  );
 
   return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;
 }

@@ -53,9 +53,7 @@ export function buildFeeBumpTransaction(
   networkPassphrase: string
 ): FeeBumpTransaction {
   const inner =
-    typeof innerTx === "string"
-      ? parseTransactionXdr(innerTx, networkPassphrase)
-      : innerTx;
+    typeof innerTx === "string" ? parseTransactionXdr(innerTx, networkPassphrase) : innerTx;
 
   if (inner.signatures.length === 0) {
     throw new InvalidInputError(
@@ -72,10 +70,11 @@ export function buildFeeBumpTransaction(
   }
 
   try {
-    const feeSource =
-      typeof feePayer === "string" ? new Account(feePayer, "0") : feePayer;
+    // buildFeeBumpTransaction expects a string (public key) or Keypair for the
+    // fee-payer source, not an Account object.
+    const feePayerAddress = typeof feePayer === "string" ? feePayer : feePayer.publicKey();
     return TransactionBuilder.buildFeeBumpTransaction(
-      feeSource,
+      feePayerAddress,
       fee,
       inner,
       networkPassphrase
@@ -136,7 +135,7 @@ function parseTransactionXdr(xdr: string, networkPassphrase: string): Transactio
   }
 
   try {
-    const parsed = Transaction.fromXDR(xdr.trim(), networkPassphrase);
+    const parsed = TransactionBuilder.fromXDR(xdr.trim(), networkPassphrase);
     if (parsed instanceof Transaction) {
       return parsed;
     }

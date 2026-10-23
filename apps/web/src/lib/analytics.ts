@@ -175,7 +175,7 @@ export function computeAnalytics(
   // otherwise return empty series (no fabricated data from post counts).
   // See issue #1515.
   const followerGrowth: FollowerPoint[] = attestation
-    ? [{ date: sortedDates[0]?.date ?? "", followers: Number(attestation.report.followerDelta) }]
+    ? [{ date: sortedDates[0]?.[0] ?? "", followers: Number(attestation.report.followerDelta) }]
     : [];
 
   // Tip earnings: aggregate by post creation date (each post's tip_total

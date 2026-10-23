@@ -4,6 +4,12 @@
  * Guards against issue #1298: submitTx must sign with the connected wallet,
  * broadcast via sendTransaction, poll getTransaction, and return the real
  * on-chain hash — never a hard-coded "mock-tx:" string or random hex.
+ *
+ * Issue #1591 additionally requires that the wallet is never handed a plain
+ * descriptor. `buildTxXdr` is mocked here only at the SDK-client boundary
+ * (prepare* helpers), so the descriptor parsing and argument mapping under
+ * `utils/txDescriptors` still runs for real; the assertions below prove the
+ * wallet receives the XDR the builder produced, not the descriptor string.
  */
 
 import { renderHook, act } from "@testing-library/react-native";
@@ -29,16 +35,44 @@ jest.mock("../../context/ToastContext", () => ({
 
 // NetworkContext — provide a fake RPC URL so we can intercept fetch
 const FAKE_RPC_URL = "https://rpc.test.example";
+const FAKE_CONTRACT_ID = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+// The SDK client is the only thing stubbed. Descriptor parsing and the
+// descriptor → prepare* mapping still execute for real, so the tests below
+// cover the #1591 build step instead of mocking it away.
+const mockPrepareLikePostTx = jest.fn(async () => "BUILT_XDR_LIKE");
+const mockPrepareFollowTx = jest.fn(async () => "BUILT_XDR_FOLLOW");
+const mockPrepareDeletePostTx = jest.fn(async () => "BUILT_XDR_DELETE");
+
+jest.mock("linkora-sdk", () => ({
+  LinkoraClient: jest.fn().mockImplementation(() => ({
+    prepareLikePostTx: mockPrepareLikePostTx,
+    prepareFollowTx: mockPrepareFollowTx,
+    prepareUnfollowTx: jest.fn(async () => "BUILT_XDR_UNFOLLOW"),
+    prepareBlockUserTx: jest.fn(async () => "BUILT_XDR_BLOCK"),
+    prepareUnblockUserTx: jest.fn(async () => "BUILT_XDR_UNBLOCK"),
+    prepareTipTx: jest.fn(async () => "BUILT_XDR_TIP"),
+    prepareSetProfileTx: jest.fn(async () => "BUILT_XDR_PROFILE"),
+    prepareDeletePostTx: mockPrepareDeletePostTx,
+    preparePoolDepositTx: jest.fn(async () => "BUILT_XDR_DEPOSIT"),
+    preparePoolWithdrawTx: jest.fn(async () => "BUILT_XDR_WITHDRAW"),
+  })),
+}));
 
 jest.mock("../../context/NetworkContext", () => ({
   useNetworkContext: () => ({
     rpcUrl: FAKE_RPC_URL,
+    contractId: FAKE_CONTRACT_ID,
+    network: { id: "TESTNET" },
   }),
 }));
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// A well-formed descriptor: `like_post:<user>:<postId>`.
+const VALID_DESCRIPTOR = `like_post:GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:42`;
 
 const REAL_TX_HASH = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
 const SIGNED_XDR =
@@ -106,6 +140,9 @@ function mockFetchSequence(hash: string = REAL_TX_HASH) {
 describe("useSubmitTx (#1298)", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockPrepareLikePostTx.mockImplementation(async () => "BUILT_XDR_LIKE");
+    mockPrepareFollowTx.mockImplementation(async () => "BUILT_XDR_FOLLOW");
+    mockPrepareDeletePostTx.mockImplementation(async () => "BUILT_XDR_DELETE");
     jest.useFakeTimers();
   });
 
@@ -124,7 +161,7 @@ describe("useSubmitTx (#1298)", () => {
     let returnedHash: string | undefined;
 
     await act(async () => {
-      const promise = result.current("some:tx:descriptor");
+      const promise = result.current(VALID_DESCRIPTOR);
       // Advance timers so the polling setTimeout fires
       await jest.runAllTimersAsync();
       returnedHash = await promise;
@@ -141,7 +178,7 @@ describe("useSubmitTx (#1298)", () => {
     let returnedHash: string | undefined;
 
     await act(async () => {
-      const promise = result.current("some:tx:descriptor");
+      const promise = result.current(VALID_DESCRIPTOR);
       await jest.runAllTimersAsync();
       returnedHash = await promise;
     });
@@ -157,7 +194,7 @@ describe("useSubmitTx (#1298)", () => {
     let returnedHash: string | undefined;
 
     await act(async () => {
-      const promise = result.current("some:tx:descriptor");
+      const promise = result.current(VALID_DESCRIPTOR);
       await jest.runAllTimersAsync();
       returnedHash = await promise;
     });
@@ -173,7 +210,7 @@ describe("useSubmitTx (#1298)", () => {
     const { result } = renderHook(() => useSubmitTx());
 
     await act(async () => {
-      const promise = result.current("some:tx:descriptor");
+      const promise = result.current(VALID_DESCRIPTOR);
       await jest.runAllTimersAsync();
       await promise;
     });
@@ -189,7 +226,7 @@ describe("useSubmitTx (#1298)", () => {
     const { result } = renderHook(() => useSubmitTx());
 
     await act(async () => {
-      const promise = result.current("my:descriptor");
+      const promise = result.current(VALID_DESCRIPTOR);
       await jest.runAllTimersAsync();
       await promise;
     });
@@ -211,7 +248,7 @@ describe("useSubmitTx (#1298)", () => {
     const { result } = renderHook(() => useSubmitTx());
 
     await act(async () => {
-      const promise = result.current("some:tx:descriptor");
+      const promise = result.current(VALID_DESCRIPTOR);
       await jest.runAllTimersAsync();
       await promise;
     });
@@ -233,7 +270,7 @@ describe("useSubmitTx (#1298)", () => {
     const { result } = renderHook(() => useSubmitTx());
 
     await act(async () => {
-      await expect(result.current("some:tx:descriptor")).rejects.toThrow(
+      await expect(result.current(VALID_DESCRIPTOR)).rejects.toThrow(
         /no wallet connected/i
       );
     });
@@ -248,7 +285,7 @@ describe("useSubmitTx (#1298)", () => {
     const { result } = renderHook(() => useSubmitTx());
 
     await act(async () => {
-      await expect(result.current("some:tx:descriptor")).rejects.toThrow(
+      await expect(result.current(VALID_DESCRIPTOR)).rejects.toThrow(
         /user rejected signing/i
       );
     });
@@ -271,7 +308,7 @@ describe("useSubmitTx (#1298)", () => {
     const { result } = renderHook(() => useSubmitTx());
 
     await act(async () => {
-      await expect(result.current("some:tx:descriptor")).rejects.toThrow(
+      await expect(result.current(VALID_DESCRIPTOR)).rejects.toThrow(
         /bad sequence number/i
       );
     });
@@ -299,11 +336,135 @@ describe("useSubmitTx (#1298)", () => {
 
     await act(async () => {
       await jest.runAllTimersAsync();
-      await expect(result.current("some:tx:descriptor")).rejects.toThrow(
+      await expect(result.current(VALID_DESCRIPTOR)).rejects.toThrow(
         /transaction failed on-chain/i
       );
     });
 
     expect(mockShowError).toHaveBeenCalled();
+  });
+});
+
+/**
+ * #1591 — the signing path must never be handed a descriptor.
+ *
+ * These assertions are deliberately not satisfied by the pre-#1591 behaviour:
+ * before the fix, `signTransaction` received the raw `like_post:G…:42` string.
+ */
+describe("useSubmitTx descriptor→XDR build step (#1591)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrepareLikePostTx.mockImplementation(async () => "BUILT_XDR_LIKE");
+    mockPrepareFollowTx.mockImplementation(async () => "BUILT_XDR_FOLLOW");
+    mockPrepareDeletePostTx.mockImplementation(async () => "BUILT_XDR_DELETE");
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    clearFakeWalletKit();
+    jest.useRealTimers();
+  });
+
+  it("signs the XDR produced by the builder, not the descriptor", async () => {
+    installFakeWalletKit();
+    mockFetchSequence(REAL_TX_HASH);
+
+    const { result } = renderHook(() => useSubmitTx());
+
+    await act(async () => {
+      const promise = result.current(VALID_DESCRIPTOR);
+      await jest.runAllTimersAsync();
+      await promise;
+    });
+
+    const walletKit = (globalThis as { __LINKORA_WALLET_KIT__: { signTransaction: jest.Mock } })
+      .__LINKORA_WALLET_KIT__;
+    const signedPayload = walletKit.signTransaction.mock.calls[0][0];
+
+    expect(signedPayload.txXdr).toBe("BUILT_XDR_LIKE");
+    expect(signedPayload.txXdr).not.toContain("like_post:");
+    expect(signedPayload.txXdr).not.toBe(VALID_DESCRIPTOR);
+  });
+
+  it("maps descriptor fields onto the matching SDK prepare helper", async () => {
+    installFakeWalletKit();
+    mockFetchSequence(REAL_TX_HASH);
+
+    const { result } = renderHook(() => useSubmitTx());
+
+    await act(async () => {
+      const promise = result.current(VALID_DESCRIPTOR);
+      await jest.runAllTimersAsync();
+      await promise;
+    });
+
+    expect(mockPrepareLikePostTx).toHaveBeenCalledWith(
+      "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      42n
+    );
+  });
+
+  it("rejects an unknown descriptor method before the wallet is ever called", async () => {
+    installFakeWalletKit();
+
+    const { result } = renderHook(() => useSubmitTx());
+
+    await act(async () => {
+      await expect(result.current("pool_withdraw_approve:POOL:GA:1:ADMIN=hash")).rejects.toThrow(
+        /unsupported transaction descriptor/i
+      );
+    });
+
+    const walletKit = (globalThis as { __LINKORA_WALLET_KIT__: { signTransaction: jest.Mock } })
+      .__LINKORA_WALLET_KIT__;
+    expect(walletKit.signTransaction).not.toHaveBeenCalled();
+    expect(mockShowSuccess).not.toHaveBeenCalled();
+  });
+
+  it("rejects a descriptor with a missing field and surfaces the error", async () => {
+    installFakeWalletKit();
+
+    const { result } = renderHook(() => useSubmitTx());
+
+    await act(async () => {
+      await expect(result.current("like_post:GAAAA")).rejects.toThrow(/malformed/i);
+    });
+
+    expect(mockShowError).toHaveBeenCalledWith(expect.stringMatching(/malformed/i));
+    expect(mockShowSuccess).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-integer postId instead of building a bogus transaction", async () => {
+    installFakeWalletKit();
+
+    const { result } = renderHook(() => useSubmitTx());
+
+    await act(async () => {
+      await expect(
+        result.current("like_post:GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:not-a-number")
+      ).rejects.toThrow(/postId must be a non-negative integer/i);
+    });
+
+    expect(mockPrepareLikePostTx).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a build failure and never shows success", async () => {
+    installFakeWalletKit();
+    mockPrepareLikePostTx.mockImplementation(async () => {
+      throw new Error("Transaction simulation failed: insufficient balance");
+    });
+
+    const { result } = renderHook(() => useSubmitTx());
+
+    await act(async () => {
+      await expect(result.current(VALID_DESCRIPTOR)).rejects.toThrow(
+        /simulation failed: insufficient balance/i
+      );
+    });
+
+    expect(mockShowError).toHaveBeenCalledWith(
+      expect.stringMatching(/simulation failed/i)
+    );
+    expect(mockShowSuccess).not.toHaveBeenCalled();
   });
 });

@@ -1,31 +1,75 @@
 "use client";
 
-import React, { useState } from "react";
-import { usePosts } from "@/hooks/usePosts";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { usePosts, type OptimisticPost } from "@/hooks/usePosts";
+import { useLikeMutation } from "@/hooks/useLikeMutation";
 import { CreatePostModal } from "../modals/CreatePostModal";
 import { PostCard, PostCardSkeleton } from "../PostCard";
+import { Plus, X } from "lucide-react";
+import { PostCard } from "../PostCard";
+import { FeedSkeleton } from "../skeletons";
 import { Plus } from "lucide-react";
+import { useFeatureFlag } from "@/lib/featureFlags";
+
+/** Number of posts to show per page when infinite scroll is enabled. */
+const PAGE_SIZE = 10;
 
 export interface FeedContainerProps {
   authorAddress?: string;
 }
 
 export function FeedContainer({ authorAddress }: FeedContainerProps) {
+  const infiniteScrollEnabled = useFeatureFlag("infinite-scroll");
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const { posts, loading, error, addPostOptimistic } = usePosts();
+  const {
+    posts,
+    loading,
+    error,
+    postError,
+    clearPostError,
+    addPostOptimistic,
+    deletePostOptimistic,
+  } = usePosts();
 
-  const handleCreatePost = async (data: {
-    content: string;
-    images: string[];
-    linkUrl?: string;
-  }) => {
-    await addPostOptimistic({
-      content: data.content,
-      author: authorAddress,
-      images: data.images,
-      linkUrl: data.linkUrl,
-    });
-  };
+  // ── Infinite scroll state ────────────────────────────────────────────────
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  // The list of posts actually shown — all posts when flag is off, paginated when on
+  const visiblePosts = infiniteScrollEnabled ? posts.slice(0, visibleCount) : posts;
+  const hasMore = infiniteScrollEnabled && visibleCount < posts.length;
+
+  // Attach IntersectionObserver to load the next page when sentinel enters view
+  useEffect(() => {
+    if (!infiniteScrollEnabled) return;
+
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && hasMore) {
+          setVisibleCount((prev) => Math.min(prev + PAGE_SIZE, posts.length));
+        }
+      },
+      { rootMargin: "200px" }
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [infiniteScrollEnabled, hasMore, posts.length]);
+
+  const handleCreatePost = useCallback(
+    async (data: { content: string; images: string[]; linkUrl?: string }) => {
+      await addPostOptimistic({
+        content: data.content,
+        author: authorAddress,
+        images: data.images,
+        linkUrl: data.linkUrl,
+      });
+    },
+    [addPostOptimistic, authorAddress]
+  );
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-6 space-y-6">
@@ -50,20 +94,35 @@ export function FeedContainer({ authorAddress }: FeedContainerProps) {
         </button>
       </div>
 
-      {/* Error state */}
+      {/* Fetch error */}
       {error && (
         <div className="rounded-lg bg-red-500/10 border border-red-500/20 p-4 text-sm text-red-400 text-center">
           {error}
         </div>
       )}
 
+      {/* Mutation error toast */}
+      {postError && (
+        <div
+          role="alert"
+          aria-live="assertive"
+          className="flex items-center justify-between gap-3 rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3 text-sm text-red-400"
+        >
+          <span>{postError}</span>
+          <button
+            type="button"
+            onClick={clearPostError}
+            aria-label="Dismiss error"
+            className="shrink-0 text-red-400/70 hover:text-red-300 transition-colors"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       {/* Feed list */}
       {loading ? (
-        <div className="space-y-4">
-          <PostCardSkeleton />
-          <PostCardSkeleton />
-          <PostCardSkeleton />
-        </div>
+        <FeedSkeleton />
       ) : posts.length === 0 ? (
         <div className="text-center py-12 border border-dashed border-[var(--border)] rounded-xl">
           <p className="text-gray-500 font-medium">No posts found</p>
@@ -71,21 +130,47 @@ export function FeedContainer({ authorAddress }: FeedContainerProps) {
         </div>
       ) : (
         <div className="space-y-4">
-          {posts.map((post) => (
+          {visiblePosts.map((post) => (
             <div
               key={post.id}
-              className={`transition-opacity duration-200 ${
-                post.isOptimistic ? "opacity-70 animate-pulse" : "opacity-100"
+              className={`transition-all duration-300 ${
+                post.isDeleting
+                  ? "opacity-0 scale-95 pointer-events-none"
+                  : post.isOptimistic
+                    ? "opacity-60"
+                    : "opacity-100"
               }`}
+              aria-hidden={post.isDeleting}
             >
-              <PostCard post={post} />
-              {post.isOptimistic && (
-                <span className="block mt-1 text-right text-[10px] text-violet-400 font-medium">
-                  Posting...
-                </span>
+              <FeedPost post={post} authorAddress={authorAddress} onDelete={deletePostOptimistic} />
+              {post.isPending && !post.isDeleting && (
+                <div className="flex items-center gap-1.5 mt-1 justify-end">
+                  {/* Spinner */}
+                  <span
+                    className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-violet-400 border-t-transparent"
+                    aria-hidden="true"
+                  />
+                  <span className="text-[10px] text-violet-400 font-medium">Posting…</span>
+                </div>
+              )}
+              {post.error && (
+                <p role="alert" className="mt-1 text-right text-[10px] text-red-400">
+                  {post.error}
+                </p>
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Infinite scroll sentinel / loading indicator */}
+      {infiniteScrollEnabled && (
+        <div ref={sentinelRef} aria-hidden="true">
+          {hasMore && (
+            <div className="flex justify-center py-4">
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-violet-500 border-t-transparent" />
+            </div>
+          )}
         </div>
       )}
 
@@ -97,5 +182,47 @@ export function FeedContainer({ authorAddress }: FeedContainerProps) {
         author={authorAddress}
       />
     </div>
+  );
+}
+
+interface FeedPostProps {
+  post: OptimisticPost;
+  authorAddress?: string;
+  /** Optimistic delete; restores the post and raises a toast on failure. */
+  onDelete: (postId: string | number) => Promise<unknown>;
+}
+
+/**
+ * One feed row.
+ *
+ * The like button is backed by `useLikeMutation`, so the heart and counter
+ * flip synchronously and roll back (with a toast) if the transaction fails.
+ * The delete affordance is author-only and removes the post optimistically.
+ */
+function FeedPost({ post, authorAddress, onDelete }: FeedPostProps) {
+  const like = useLikeMutation({
+    postId: post.id,
+    initialLikeCount: Number(post.like_count ?? 0),
+  });
+
+  const canDelete = Boolean(authorAddress) && post.author === authorAddress && !post.isOptimistic;
+
+  const handleDelete = useCallback(() => {
+    if (!canDelete) return;
+    // Rollback and the error toast are handled inside the mutation hook.
+    void onDelete(post.id).catch(() => undefined);
+  }, [canDelete, onDelete, post.id]);
+
+  return (
+    <PostCard
+      post={{ ...post, like_count: like.likeCount }}
+      isLiked={like.liked}
+      onLike={() => {
+        void like.like();
+      }}
+      onDelete={canDelete ? handleDelete : undefined}
+      isDeleting={post.isDeleting}
+      disabled={post.isDeleting}
+    />
   );
 }

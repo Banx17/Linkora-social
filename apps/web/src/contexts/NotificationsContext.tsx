@@ -227,87 +227,131 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   useEffect(() => {
     if (!address) return;
 
-    const ws = new WebSocket(INDEXER_WS_URL);
+    let ws: WebSocket | null = null;
+    let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+    let attempts = 0;
+    let isDisposed = false;
 
-    ws.onopen = () => {
-      ws.send(
-        JSON.stringify({
-          action: "subscribe",
-          types: ["follow", "like", "tip", "gov_proposal_created", "gov_proposal_executed"],
-        })
-      );
-    };
+    const connect = () => {
+      if (isDisposed) return;
 
-    ws.onmessage = async (e) => {
       try {
-        const { type, payload } = JSON.parse(e.data);
-        if (!payload || !payload.data) return;
-
-        const data = payload.data;
-        const timestamp = data.ledgerClosedAt ?? new Date().toISOString();
-        const eventId = data.pagingToken ?? `${type}-${Date.now()}`;
-
-        if (type === "follow" && data.followee === address) {
-          addInboxNotification({
-            id: eventId,
-            type: "follow",
-            actor: data.follower,
-            timestamp,
-            read: false,
-          });
-        } else if (type === "like" && data.user !== address) {
-          const excerpt = await fetchPostExcerpt(data.post_id);
-          addInboxNotification({
-            id: eventId,
-            type: "like",
-            actor: data.user,
-            postId: data.post_id,
-            excerpt,
-            timestamp,
-            read: false,
-          });
-        } else if (type === "tip" && data.tipper !== address) {
-          const excerpt = await fetchPostExcerpt(data.post_id);
-          addInboxNotification({
-            id: eventId,
-            type: "tip",
-            actor: data.tipper,
-            postId: data.post_id,
-            amountXlm: stroopsToXlm(data.amount),
-            excerpt,
-            timestamp,
-            read: false,
-          });
-        } else if (type === "gov_proposal_created") {
-          addInboxNotification({
-            id: eventId,
-            type: "governance",
-            actor: data.proposer ?? "System",
-            proposalId: data.proposal_id,
-            parameter: data.parameter,
-            excerpt: "A new governance proposal was created",
-            timestamp,
-            read: false,
-          });
-        } else if (type === "gov_proposal_executed") {
-          addInboxNotification({
-            id: eventId,
-            type: "governance",
-            actor: "System",
-            proposalId: data.proposal_id,
-            parameter: data.parameter,
-            excerpt: "A governance proposal was executed",
-            timestamp,
-            read: false,
-          });
-        }
+        ws = new WebSocket(INDEXER_WS_URL);
       } catch (err) {
-        console.error("Failed to process websocket message", err);
+        console.error("Failed to construct notifications WebSocket:", err);
+        scheduleReconnect();
+        return;
       }
+
+      ws.onopen = () => {
+        attempts = 0;
+        ws?.send(
+          JSON.stringify({
+            action: "subscribe",
+            types: ["follow", "like", "tip", "gov_proposal_created", "gov_proposal_executed"],
+          })
+        );
+      };
+
+      ws.onmessage = async (e) => {
+        try {
+          const { type, payload } = JSON.parse(e.data);
+          if (!payload || !payload.data) return;
+
+          const data = payload.data;
+          const timestamp = data.ledgerClosedAt ?? new Date().toISOString();
+          const eventId = data.pagingToken ?? `${type}-${Date.now()}`;
+
+          // Ids match the indexer inbox (GET /api/notifications/inbox/:address)
+          // so a fetched page never duplicates an item that arrived live (#1632).
+          if (type === "follow" && data.followee === address) {
+            addInboxNotification({
+              id: `follow:${data.follower}`,
+              type: "follow",
+              actor: data.follower,
+              timestamp,
+              read: false,
+            });
+          } else if (type === "like" && data.user !== address) {
+            const excerpt = await fetchPostExcerpt(data.post_id);
+            addInboxNotification({
+              id: `like:${data.post_id}:${data.user}`,
+              type: "like",
+              actor: data.user,
+              postId: data.post_id,
+              excerpt,
+              timestamp,
+              read: false,
+            });
+          } else if (type === "tip" && data.tipper !== address) {
+            const excerpt = await fetchPostExcerpt(data.post_id);
+            addInboxNotification({
+              id: data.txHash ? `tip:${data.txHash}` : eventId,
+              type: "tip",
+              actor: data.tipper,
+              postId: data.post_id,
+              amountXlm: stroopsToXlm(data.amount),
+              excerpt,
+              timestamp,
+              read: false,
+            });
+          } else if (type === "gov_proposal_created") {
+            addInboxNotification({
+              id: eventId,
+              type: "governance",
+              actor: data.proposer ?? "System",
+              proposalId: data.proposal_id,
+              parameter: data.parameter,
+              excerpt: "A new governance proposal was created",
+              timestamp,
+              read: false,
+            });
+          } else if (type === "gov_proposal_executed") {
+            addInboxNotification({
+              id: eventId,
+              type: "governance",
+              actor: "System",
+              proposalId: data.proposal_id,
+              parameter: data.parameter,
+              excerpt: "A governance proposal was executed",
+              timestamp,
+              read: false,
+            });
+          }
+        } catch (err) {
+          console.error("Failed to process websocket message", err);
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.error("Notifications WebSocket error:", err);
+      };
+
+      ws.onclose = () => {
+        if (!isDisposed) {
+          scheduleReconnect();
+        }
+      };
     };
+
+    const scheduleReconnect = () => {
+      if (isDisposed || reconnectTimeout) return;
+      const delay = Math.min(1000 * Math.pow(2, attempts), 30000);
+      attempts++;
+      reconnectTimeout = setTimeout(() => {
+        reconnectTimeout = null;
+        connect();
+      }, delay);
+    };
+
+    connect();
 
     return () => {
-      ws.close();
+      isDisposed = true;
+      if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+      }
+      ws?.close();
     };
   }, [address, addInboxNotification]);
 

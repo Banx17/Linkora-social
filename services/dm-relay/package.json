@@ -1,43 +1,32 @@
 {
-  "name": "linkora-dm-relay",
+  "name": "@linkora/dm-relay",
   "version": "0.1.0",
-  "description": "DM relay service for Linkora - transport-only encrypted message relay",
-  "main": "dist/server.js",
+  "private": true,
+  "description": "End-to-end encrypted direct message relay for Linkora",
+  "main": "dist/index.js",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
+    "dev": "ts-node src/index.ts",
     "build": "tsc",
-    "typecheck": "tsc --noEmit",
-    "start": "node dist/server.js",
+    "start": "node dist/index.js",
     "test": "jest",
-    "lint": "eslint src --ext .ts",
-    "format": "prettier --write \"src/**/*.{ts,js}\"",
-    "db:migrate": "tsx src/migrate.ts",
-    "db:rollback": "tsx src/migrate.ts rollback"
+    "lint": "eslint . --ext .ts",
+    "format": "prettier --write \"src/**/*.ts\""
   },
-  "keywords": [
-    "linkora",
-    "dm",
-    "relay",
-    "encryption",
-    "stellar"
-  ],
-  "author": "Linkora Contributors",
-  "license": "MIT",
   "dependencies": {
+    "@linkora/types": "workspace:*",
     "@noble/hashes": "^1.8.0",
     "@stellar/stellar-sdk": "^15.1.0",
-    "express": "^4.18.2",
-    "express-rate-limit": "^7.3.1",
-    "ioredis": "5.3.2",
-    "rate-limit-redis": "4.2.0",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.3.1",
     "helmet": "^7.1.0",
+    "ioredis": "5.3.2",
     "node-cron": "^3.0.3",
     "pg": "^8.11.3",
     "pino": "^8.21.0",
+    "rate-limit-redis": "4.2.0",
     "ws": "^8.18.0",
-    "@linkora/types": "workspace:*",
     "zod": "^3.22.4"
   },
   "devDependencies": {
@@ -58,7 +47,5 @@
     "tsx": "^4.7.0",
     "typescript": "^5.3.3"
   },
-  "engines": {
-    "node": ">=18"
-  }
+  "engines": { "node": ">=18" }
 }

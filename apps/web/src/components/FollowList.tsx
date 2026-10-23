@@ -2,13 +2,19 @@
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
-import { LinkoraClient } from "linkora-sdk";
 import { OptimisticStore } from "@/lib/optimisticStore";
+import { useFollowMutation } from "@/hooks/useFollowMutation";
+import { submitFollowTransaction } from "@/lib/followTransaction";
 import { AnimatedList } from "@/components/AnimatedList";
+import { VerificationBadge, type VerificationLevel } from "@/components/VerificationBadge";
 
 export interface FollowUser {
   address: string;
   username: string;
+  /** Whether the account holds an on-chain attestation. */
+  isVerified?: boolean;
+  /** Provenance of the account's verification, when verified. */
+  verificationLevel?: VerificationLevel | null;
 }
 
 interface FollowListProps {
@@ -47,16 +53,8 @@ export function FollowList({ address, type }: FollowListProps) {
   const [, setTick] = useState(0);
 
   const loadingRef = useRef(false);
-  const client = useRef<LinkoraClient | null>(null);
 
   useEffect(() => {
-    client.current = new LinkoraClient({
-      contractId:
-        process.env.NEXT_PUBLIC_CONTRACT_ID ||
-        "CBQHLSNMBF4HS3UX2PV72T75V2SXE7M2EZZTQ6YC5DSXIGGY4NPSAFAF",
-      rpcUrl: process.env.NEXT_PUBLIC_SOROBAN_RPC_URL || "https://soroban-testnet.stellar.org",
-    });
-
     if (typeof window !== "undefined") {
       const storedUser =
         localStorage.getItem("linkora_wallet_address") ||
@@ -127,36 +125,6 @@ export function FollowList({ address, type }: FollowListProps) {
     }
   }, [hasMore, load, loading, page]);
 
-  const handleToggleFollow = async (targetUser: FollowUser) => {
-    if (!currentUser) {
-      alert("Please connect your wallet to follow users.");
-      return;
-    }
-
-    const targetAddress = targetUser.address;
-    const isFollowing = OptimisticStore.isFollowing(targetAddress);
-
-    OptimisticStore.setFollowing(targetAddress, !isFollowing);
-    OptimisticStore.setPending(targetAddress, { isPending: true });
-
-    try {
-      const isMockAddress = targetAddress.includes("XXXX") || currentUser.includes("XXXX");
-      if (client.current && !isMockAddress) {
-        if (isFollowing) {
-          client.current.unfollow(currentUser, targetAddress);
-        } else {
-          client.current.follow(currentUser, targetAddress);
-        }
-      }
-      await new Promise((r) => setTimeout(r, 600));
-    } catch (err) {
-      OptimisticStore.setFollowing(targetAddress, isFollowing);
-      alert(err instanceof Error ? err.message : "Action failed");
-    } finally {
-      OptimisticStore.setPending(targetAddress, { isPending: false });
-    }
-  };
-
   const visibleUsers = users.filter((u) => {
     const isBlocked = blockedList.includes(u.address);
     if (isBlocked) return false;
@@ -173,11 +141,11 @@ export function FollowList({ address, type }: FollowListProps) {
       <header className="flex flex-col gap-2 mb-6">
         <Link
           href={`/profile/${address}`}
-          className="text-sm text-indigo-600 hover:text-indigo-800 font-semibold mb-2 inline-block self-start"
+          className="text-sm font-semibold mb-2 inline-block self-start text-[var(--accent)] hover:opacity-80"
         >
           &larr; Back to Profile
         </Link>
-        <h1 className="text-2xl font-bold text-gray-900">
+        <h1 className="text-2xl font-bold text-[var(--foreground)]">
           {type === "followers" ? "Followers" : "Following"}
         </h1>
       </header>
@@ -188,19 +156,23 @@ export function FollowList({ address, type }: FollowListProps) {
           placeholder="Filter by username..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-gray-900 shadow-sm"
+          className="w-full px-4 py-2.5 rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)] border border-[var(--border)] bg-[var(--background)] text-[var(--foreground)] placeholder:text-[var(--text-muted)]"
           aria-label="Filter users by username"
         />
       </div>
 
       {visibleUsers.length === 0 && !loading && (
-        <div className="text-center p-8 bg-gray-50 border border-gray-200 rounded-2xl">
-          <p className="text-gray-500">No accounts found.</p>
+        <div className="text-center p-8 rounded-2xl border border-[var(--border)] bg-[var(--muted)]">
+          <p className="text-[var(--text-muted)]">No accounts found.</p>
         </div>
       )}
 
+      {/* role="alert" ensures screen readers announce errors as they appear */}
       {error && (
-        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <div
+          role="alert"
+          className="mb-4 rounded-xl border border-[var(--color-error)] bg-[var(--color-error-light)] p-3 text-sm text-[var(--color-error)]"
+        >
           {error}
         </div>
       )}
@@ -213,65 +185,56 @@ export function FollowList({ address, type }: FollowListProps) {
         getKey={(user) => user.address}
         className="flex flex-col gap-3"
         renderItem={(user, state) => {
-          const isFollowing = OptimisticStore.isFollowing(user.address);
-          const isPending = OptimisticStore.isPending(user.address);
           const isMe = currentUser?.toLowerCase() === user.address.toLowerCase();
 
           return (
+            // The <li> is a layout container, not an interactive element.
+            // Navigation is handled by the inner <Link>; no tabIndex or
+            // keyboard handler belongs here.
             <li
               key={user.address}
               role="listitem"
-              tabIndex={0}
-              className={`animated-list-item flex items-center gap-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm transition-all hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer ${
+              className={`animated-list-item flex items-center gap-4 rounded-xl border border-[var(--border)] bg-[var(--background)] p-4 shadow-sm transition-colors hover:border-[var(--accent)] ${
                 state === "entering"
                   ? "animated-list-item--entering"
                   : state === "exiting"
                     ? "animated-list-item--exiting"
                     : ""
               }`}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  window.location.href = `/profile/${user.address}`;
-                }
-              }}
             >
               <div className="flex w-full items-center gap-3">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={getBlockieSvg(user.address)}
                   alt={`${user.username}'s avatar`}
-                  className="h-10 w-10 flex-shrink-0 rounded-full border border-gray-200"
+                  className="h-10 w-10 flex-shrink-0 rounded-full border border-[var(--border)]"
                 />
                 <div className="min-w-0 flex-1">
-                  <Link
-                    href={`/profile/${user.address}`}
-                    className="block truncate font-semibold text-gray-900 hover:text-indigo-600"
-                  >
-                    @{user.username}
-                  </Link>
-                  <span className="block truncate font-mono text-xs text-gray-500">
+                  <span className="flex items-center gap-1.5">
+                    <Link
+                      href={`/profile/${user.address}`}
+                      className="block truncate font-semibold text-[var(--foreground)] hover:text-[var(--accent)]"
+                    >
+                      @{user.username}
+                    </Link>
+                    {user.isVerified && (
+                      <VerificationBadge
+                        level={user.verificationLevel ?? "identity"}
+                        subject={`@${user.username}`}
+                      />
+                    )}
+                  </span>
+                  <span className="block truncate font-mono text-xs text-[var(--text-muted)]">
                     {formatAddress(user.address)}
                   </span>
                 </div>
 
                 {!isMe && currentUser && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleToggleFollow(user);
-                    }}
-                    disabled={isPending}
-                    className={`flex h-[36px] w-full flex-shrink-0 items-center justify-center rounded-lg px-4 py-1.5 text-sm font-semibold transition-all sm:w-auto ${
-                      isFollowing
-                        ? "border border-gray-200 bg-gray-100 text-gray-700 hover:bg-gray-250"
-                        : "bg-indigo-600 text-white hover:bg-indigo-700"
-                    } ${isPending ? "cursor-not-allowed opacity-55" : "cursor-pointer"}`}
-                    aria-label={
-                      isFollowing ? `Unfollow ${user.username}` : `Follow ${user.username}`
-                    }
-                  >
-                    {isPending ? "Updating..." : isFollowing ? "Following" : "Follow"}
-                  </button>
+                  <FollowListButton
+                    username={user.username}
+                    address={user.address}
+                    follower={currentUser}
+                  />
                 )}
               </div>
             </li>
@@ -281,8 +244,8 @@ export function FollowList({ address, type }: FollowListProps) {
 
       {loading && (
         <div className="flex items-center justify-center gap-2 p-6" aria-live="polite">
-          <div className="w-5 h-5 border-2 border-gray-300 border-t-indigo-600 rounded-full animate-spin" />
-          <p className="text-sm text-gray-500">Loading users...</p>
+          <div className="w-5 h-5 border-2 border-[var(--border)] border-t-[var(--accent)] rounded-full animate-spin" />
+          <p className="text-sm text-[var(--text-muted)]">Loading users...</p>
         </div>
       )}
 
@@ -295,23 +258,81 @@ export function FollowList({ address, type }: FollowListProps) {
             type="button"
             onClick={goToPreviousPage}
             disabled={loading || page === 0}
-            className="min-w-[88px] rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            className="min-w-[88px] rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm font-semibold text-[var(--foreground)] hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-50"
           >
             Prev
           </button>
-          <span className="text-sm font-semibold text-gray-700" aria-live="polite">
+          <span className="text-sm font-semibold text-[var(--foreground)]" aria-live="polite">
             Page {page + 1}
           </span>
           <button
             type="button"
             onClick={goToNextPage}
             disabled={loading || !hasMore}
-            className="min-w-[88px] rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            className="min-w-[88px] rounded-lg border border-[var(--border)] bg-[var(--background)] px-4 py-2 text-sm font-semibold text-[var(--foreground)] hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-50"
           >
             Next
           </button>
         </nav>
       )}
     </div>
+  );
+}
+
+/**
+ * Row-level follow button.
+ *
+ * Immediate visual toggle + optimistic follower feedback; the on-chain
+ * transaction runs in the background and rolls back with a toast on failure.
+ * Demo/mock addresses short-circuit the network call the same way the old
+ * component did.
+ */
+function FollowListButton({
+  username,
+  address,
+  follower,
+}: {
+  username: string;
+  address: string;
+  follower: string;
+}) {
+  const initialFollowing = OptimisticStore.isFollowing(address);
+  const { isFollowing, isPending, toggle } = useFollowMutation({
+    follower,
+    followee: address,
+    initialIsFollowing: initialFollowing,
+    submitFollow: async (input) => {
+      const isMockAddress = input.follower.includes("XXXX") || input.followee.includes("XXXX");
+      if (isMockAddress) {
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        return;
+      }
+      await submitFollowTransaction(input);
+    },
+  });
+
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        toggle();
+      }}
+      disabled={isPending}
+      aria-busy={isPending}
+      className={`flex h-[36px] w-full flex-shrink-0 items-center justify-center rounded-lg px-4 py-1.5 text-sm font-semibold transition-all sm:w-auto ${
+        isFollowing
+          ? "border border-[var(--border)] bg-[var(--muted)] text-[var(--foreground)] hover:opacity-80"
+          : "bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)]"
+      } ${isPending ? "cursor-wait opacity-55" : "cursor-pointer"}`}
+      aria-label={isFollowing ? `Unfollow ${username}` : `Follow ${username}`}
+    >
+      {isPending
+        ? isFollowing
+          ? "Following…"
+          : "Unfollowing…"
+        : isFollowing
+          ? "Following"
+          : "Follow"}
+    </button>
   );
 }

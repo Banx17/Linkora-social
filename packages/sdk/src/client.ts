@@ -14,7 +14,14 @@ import {
   type FeeBumpTransaction,
 } from "@stellar/stellar-base";
 import { GeneratedLinkoraClient } from "./generated/client.js";
-import { Profile, Post, Pool, SimulationResult, LedgerFootprint } from "./types.js";
+import {
+  Profile,
+  Post,
+  Pool,
+  SimulationResult,
+  LedgerFootprint,
+  OnChainAttestation,
+} from "./types.js";
 import { Page, PaginationOptions, fetchPageWithCursor, paginateList } from "./pagination.js";
 import {
   mapError,
@@ -46,10 +53,8 @@ import {
 } from "./queue.js";
 import { submitTransaction } from "./submit.js";
 import { mapMultiOperationAuth } from "./multi-operation-auth.js";
-import {
-  buildBumpSequenceTransaction,
-  buildFeeBumpTransaction,
-} from "./tx-builder.js";
+import { buildBumpSequenceTransaction, buildFeeBumpTransaction } from "./tx-builder.js";
+import { parseContractEvent, type SorobanEvent } from "./events/types.js";
 import {
   ensureAddress,
   ensureAddressList,
@@ -132,7 +137,7 @@ function scvString(value: string): xdr.ScVal {
 function scvU32(value: number): xdr.ScVal {
   return nativeToScVal(value, { type: "u32" });
 }
-function _scvU64(value: number | bigint): xdr.ScVal {
+function scvU64(value: number | bigint): xdr.ScVal {
   return nativeToScVal(value, { type: "u64" });
 }
 function scvSymbol(value: string): xdr.ScVal {
@@ -224,6 +229,18 @@ export interface SetProfileWithNewTokenParams {
   user: string;
   username: string;
   tokenParams: Omit<DeployCreatorTokenParams, "deployer">;
+}
+
+/**
+ * Slippage protection options for pool withdrawals.
+ *
+ * - `minOut`: minimum amount the recipient must receive. The withdrawal
+ *   reverts when the pool would deliver less than this.
+ * - `deadline`: Unix timestamp after which the withdrawal is no longer valid.
+ */
+export interface PoolWithdrawOptions {
+  minOut?: number | bigint;
+  deadline?: number | bigint;
 }
 
 /**
@@ -430,7 +447,7 @@ export class LinkoraClient extends GeneratedLinkoraClient {
     // Footprint and soroban transaction data are extracted by the ONE shared
     // pipeline (issue #1356) — the same artifact the submit path signs and
     // sends, so a dry-run cannot diverge from the real submission.
-    const resourceFee = simulation.minResourceFee || "0";
+    const resourceFee = isSimulationSuccess(simulation) ? simulation.minResourceFee || "0" : "0";
     const { footprint, sorobanData } = this.extractSorobanArtifacts(simulation);
 
     return { success: true, resourceFee, footprint, sorobanData };
@@ -497,7 +514,8 @@ export class LinkoraClient extends GeneratedLinkoraClient {
     let footprint: LedgerFootprint = { readOnly: [], readWrite: [] };
     let sorobanData: string | undefined;
 
-    if (simulation.transactionData) {
+    // transactionData is only present on a successful simulation response.
+    if (isSimulationSuccess(simulation) && simulation.transactionData) {
       try {
         const built = simulation.transactionData.build();
         const fp = built.resources().footprint();
@@ -739,6 +757,70 @@ export class LinkoraClient extends GeneratedLinkoraClient {
    */
   async getProfileCount(): Promise<bigint> {
     return super.getProfileCount();
+  }
+
+  /**
+   * Look up the most recent on-chain analytics attestation recorded for a
+   * creator. Attestations are emitted by the contract's
+   * `verify_analytics_attestation` entrypoint as `AttestationVerifiedEvent`s.
+   *
+   * Returns the latest matching attestation, or `null` when the account has
+   * never been attested on-chain.
+   *
+   * @example
+   * ```ts
+   * const attestation = await client.getAnalyticsAttestation("GB...");
+   * if (attestation) console.log(attestation.oracleName);
+   * ```
+   */
+  async getAnalyticsAttestation(creator: string): Promise<OnChainAttestation | null> {
+    const attestations = await this.getAnalyticsAttestations(creator);
+    const latest = attestations[attestations.length - 1];
+    return latest ?? null;
+  }
+
+  /**
+   * Return every on-chain analytics attestation recorded for a creator,
+   * ordered oldest to newest.
+   */
+  async getAnalyticsAttestations(creator: string): Promise<OnChainAttestation[]> {
+    const response = await this._rpcServer.getEvents({
+      startLedger: 1,
+      filters: [
+        {
+          type: "contract",
+          contractIds: [this._contractId],
+        },
+      ],
+      limit: 200,
+    });
+
+    const results: OnChainAttestation[] = [];
+    for (const raw of response.events) {
+      const rawEvent: SorobanEvent = {
+        ledger: raw.ledger,
+        ledgerClosedAt: raw.ledgerClosedAt,
+        contractId: raw.contractId ? raw.contractId.toString() : undefined,
+        id: raw.id,
+        topics: raw.topic.map((t) => t.toXDR("base64")),
+        data: raw.value.toXDR("base64"),
+        txHash: raw.txHash,
+      };
+
+      const parsed = parseContractEvent(rawEvent);
+      if (!parsed || parsed.type !== "attestation_verified") continue;
+      if (parsed.creator !== creator) continue;
+      results.push({
+        creator: parsed.creator,
+        oracleName: parsed.oracle_name,
+        reportHash: parsed.report_hash,
+        windowStart: parsed.window_start,
+        windowEnd: parsed.window_end,
+        txHash: parsed.meta.txHash,
+        ledger: parsed.meta.ledger,
+      });
+    }
+    return results;
   }
 
   /**
@@ -1337,6 +1419,54 @@ export class LinkoraClient extends GeneratedLinkoraClient {
   }
 
   /**
+   * Build a submittable commit_post transaction.
+   */
+  async prepareCommitPostTx(
+    author: string,
+    contentHash: Uint8Array,
+    revealTime: number | bigint,
+    horizonUrl?: string
+  ): Promise<string> {
+    ensureAddress(author, "author");
+    if (contentHash.length !== 32) {
+      throw new Error("contentHash must be 32 bytes");
+    }
+    ensurePositiveInteger(revealTime, "revealTime");
+    const sourceAccount = await this.getAccountForTx(author, horizonUrl);
+    const tx = await this.prepareTransaction(
+      "commit_post",
+      sourceAccount,
+      scvAddress(author),
+      nativeToScVal(new Uint8Array(contentHash), { type: "bytes" }),
+      scvU64(BigInt(revealTime))
+    );
+    return tx.toEnvelope().toXDR("base64");
+  }
+
+  /**
+   * Build a submittable reveal_post transaction.
+   */
+  async prepareRevealPostTx(
+    author: string,
+    postId: number | bigint,
+    content: string,
+    horizonUrl?: string
+  ): Promise<string> {
+    ensureAddress(author, "author");
+    ensurePositiveInteger(postId, "postId");
+    ensureNonEmptyString(content, "content");
+    const sourceAccount = await this.getAccountForTx(author, horizonUrl);
+    const tx = await this.prepareTransaction(
+      "reveal_post",
+      sourceAccount,
+      scvAddress(author),
+      scvU64(BigInt(postId)),
+      scvString(content)
+    );
+    return tx.toEnvelope().toXDR("base64");
+  }
+
+  /**
    * Create a new post.
    *
    * @param author The Stellar public key of the author.
@@ -1475,6 +1605,110 @@ export class LinkoraClient extends GeneratedLinkoraClient {
       sourceAccount,
       scvAddress(follower),
       scvAddress(followee)
+    );
+    return tx.toEnvelope().toXDR("base64");
+  }
+
+  /**
+   * Build a submittable block_user transaction with the caller as the proper
+   * source account.
+   *
+   * @param blocker The Stellar public key of the user initiating the block.
+   * @param blocked The Stellar public key of the user being blocked.
+   * @param horizonUrl Optional Horizon URL to use. Defaults based on the network passphrase.
+   * @returns The base64-encoded transaction envelope XDR ready for wallet signing.
+   */
+  async prepareBlockUserTx(blocker: string, blocked: string, horizonUrl?: string): Promise<string> {
+    ensureAddress(blocker, "blocker");
+    ensureAddress(blocked, "blocked");
+    const sourceAccount = await this.getAccountForTx(blocker, horizonUrl);
+    const tx = await this.prepareTransaction(
+      "block_user",
+      sourceAccount,
+      scvAddress(blocker),
+      scvAddress(blocked)
+    );
+    return tx.toEnvelope().toXDR("base64");
+  }
+
+  /**
+   * Build a submittable unblock_user transaction with the caller as the proper
+   * source account.
+   *
+   * @param blocker The Stellar public key of the user who created the block.
+   * @param blocked The Stellar public key of the user being unblocked.
+   * @param horizonUrl Optional Horizon URL to use. Defaults based on the network passphrase.
+   * @returns The base64-encoded transaction envelope XDR ready for wallet signing.
+   */
+  async prepareUnblockUserTx(
+    blocker: string,
+    blocked: string,
+    horizonUrl?: string
+  ): Promise<string> {
+    ensureAddress(blocker, "blocker");
+    ensureAddress(blocked, "blocked");
+    const sourceAccount = await this.getAccountForTx(blocker, horizonUrl);
+    const tx = await this.prepareTransaction(
+      "unblock_user",
+      sourceAccount,
+      scvAddress(blocker),
+      scvAddress(blocked)
+    );
+    return tx.toEnvelope().toXDR("base64");
+  }
+
+  /**
+   * Build a submittable delete_post transaction with the author as the proper
+   * source account.
+   *
+   * @param author The Stellar public key of the post author (and required signer).
+   * @param postId The id of the post to delete.
+   * @param horizonUrl Optional Horizon URL to use. Defaults based on the network passphrase.
+   * @returns The base64-encoded transaction envelope XDR ready for wallet signing.
+   */
+  async prepareDeletePostTx(
+    author: string,
+    postId: number | bigint,
+    horizonUrl?: string
+  ): Promise<string> {
+    ensureAddress(author, "author");
+    ensurePositiveInteger(postId, "postId");
+    const sourceAccount = await this.getAccountForTx(author, horizonUrl);
+    const tx = await this.prepareTransaction(
+      "delete_post",
+      sourceAccount,
+      scvAddress(author),
+      nativeToScVal(postId, { type: "u64" })
+    );
+    return tx.toEnvelope().toXDR("base64");
+  }
+
+  /**
+   * Build a submittable set_profile transaction with the caller as the proper
+   * source account.
+   *
+   * @param user The Stellar public key of the profile owner.
+   * @param username The new username.
+   * @param creatorToken The SEP-41 creator token contract address.
+   * @param horizonUrl Optional Horizon URL to use. Defaults based on the network passphrase.
+   * @returns The base64-encoded transaction envelope XDR ready for wallet signing.
+   */
+  async prepareSetProfileTx(
+    user: string,
+    username: string,
+    creatorToken: string,
+    horizonUrl?: string
+  ): Promise<string> {
+    ensureAddress(user, "user");
+    ensureNonEmptyString(username, "username");
+    ensureContractAddress(creatorToken, "creatorToken");
+    const sourceAccount = await this.getAccountForTx(user, horizonUrl);
+    const tx = await this.prepareTransaction(
+      "set_profile",
+      sourceAccount,
+      scvAddress(user),
+      scvString(username),
+      scvAddress(creatorToken)
     );
     return tx.toEnvelope().toXDR("base64");
   }
@@ -1786,10 +2020,20 @@ export class LinkoraClient extends GeneratedLinkoraClient {
   /**
    * Withdraw tokens from a pool (requires multi-sig authorization).
    *
+   * Slippage protection (optional):
+   * - `minOut`: minimum amount the recipient must receive. The withdrawal
+   *   reverts when the pool would deliver less.
+   * - `deadline`: Unix timestamp after which the withdrawal is no longer
+   *   valid.
+   *
    * @param signers Array of Stellar public keys of the admins authorizing the withdrawal.
    * @param poolId The ID of the pool.
    * @param amount The amount to withdraw.
    * @param recipient The Stellar public key to receive the tokens.
+   * @param minOutOrOptions Slippage protection. Either an options object with
+   *   `minOut` and `deadline`, or the minimum received amount directly.
+   * @param deadlineArg Unix timestamp after which the withdrawal is no longer
+   *   valid. Only used when `minOutOrOptions` is not an options object.
    * @returns The base64-encoded XDR of the transaction operation.
    *
    * @example
@@ -1798,7 +2042,8 @@ export class LinkoraClient extends GeneratedLinkoraClient {
    *   ["GBFOY...", "GCO23..."],
    *   "my-pool-1",
    *   500n,
-   *   "GDX..."
+   *   "GDX...",
+   *   { minOut: 495n, deadline: 1234567890 }
    * );
    * console.log("Withdraw Op XDR:", txOp);
    * ```
@@ -1807,13 +2052,44 @@ export class LinkoraClient extends GeneratedLinkoraClient {
     signers: string[],
     poolId: string,
     amount: number | bigint,
-    recipient: string
+    recipient: string,
+    minOutOrOptions?: PoolWithdrawOptions | number | bigint | null,
+    deadlineArg?: number | bigint | null
   ): string {
+    const options =
+      typeof minOutOrOptions === "object" && minOutOrOptions !== null
+        ? minOutOrOptions
+        : { minOut: minOutOrOptions ?? undefined, deadline: deadlineArg ?? undefined };
     ensureAddressList(signers, "signers");
     ensureNonEmptyString(poolId, "poolId");
     ensurePositiveInteger(amount, "amount");
     ensureAddress(recipient, "recipient");
-    return super.poolWithdraw(signers, poolId, BigInt(amount), recipient);
+    return super.poolWithdraw(
+      signers,
+      poolId,
+      BigInt(amount),
+      recipient,
+      options.minOut == null ? null : BigInt(options.minOut),
+      options.deadline == null ? null : BigInt(options.deadline)
+    );
+  }
+
+  /**
+   * Withdraw tokens from a pool (deprecated alias of {@link poolWithdraw}).
+   *
+   * @deprecated Use poolWithdraw(signers, poolId, amount, recipient, { minOut, deadline }).
+   *   Pools are multisig treasuries: a withdrawal needs the admin signers and
+   *   the recipient, there are no shares to burn.
+   */
+  withdrawFromPool(
+    signers: string[],
+    poolId: string,
+    amount: number | bigint,
+    recipient: string,
+    minOutOrOptions?: PoolWithdrawOptions | number | bigint | null,
+    deadlineArg?: number | bigint | null
+  ): string {
+    return this.poolWithdraw(signers, poolId, amount, recipient, minOutOrOptions, deadlineArg);
   }
 
   /**
@@ -1824,6 +2100,8 @@ export class LinkoraClient extends GeneratedLinkoraClient {
    * @param poolId The ID of the pool.
    * @param amount The amount to withdraw.
    * @param recipient The Stellar public key to receive the tokens.
+   * @param options Optional slippage protection: minOut and deadline. A string
+   *   is accepted for backwards compatibility and treated as the horizon URL.
    * @param horizonUrl Optional Horizon URL to use. Defaults based on the network passphrase.
    * @returns The base64-encoded transaction envelope XDR ready for wallet signing.
    */
@@ -1832,20 +2110,115 @@ export class LinkoraClient extends GeneratedLinkoraClient {
     poolId: string,
     amount: number | bigint,
     recipient: string,
+    options?: PoolWithdrawOptions | string | null,
     horizonUrl?: string
   ): Promise<string> {
+    const opts = typeof options === "string" ? null : options;
+    const horizon = typeof options === "string" ? options : horizonUrl;
     ensureAddressList(signers, "signers");
     ensureNonEmptyString(poolId, "poolId");
     ensurePositiveInteger(amount, "amount");
     ensureAddress(recipient, "recipient");
-    const sourceAccount = await this.getAccountForTx(signers[0], horizonUrl);
+    const sourceAccount = await this.getAccountForTx(signers[0]!, horizon);
     const tx = await this.prepareTransaction(
       "pool_withdraw",
       sourceAccount,
       scvAddressVec(signers),
       scvSymbol(poolId),
       scvI128(amount),
-      scvAddress(recipient)
+      scvAddress(recipient),
+      opts?.minOut == null ? nativeToScVal(null) : scvI128(BigInt(opts.minOut)),
+      opts?.deadline == null ? nativeToScVal(null) : scvU64(BigInt(opts.deadline))
+    );
+    return tx.toEnvelope().toXDR("base64");
+  }
+
+  /**
+   * Build a submittable add_pool_admin transaction with the first signer as the
+   * proper source account.
+   *
+   * @param signers Array of Stellar public keys of the admins authorizing the change.
+   * @param poolId The ID of the pool.
+   * @param newAdmin The Stellar public key to add as an admin.
+   * @param horizonUrl Optional Horizon URL to use. Defaults based on the network passphrase.
+   * @returns The base64-encoded transaction envelope XDR ready for wallet signing.
+   */
+  async prepareAddPoolAdminTx(
+    signers: string[],
+    poolId: string,
+    newAdmin: string,
+    horizonUrl?: string
+  ): Promise<string> {
+    ensureAddressList(signers, "signers");
+    ensureNonEmptyString(poolId, "poolId");
+    ensureAddress(newAdmin, "newAdmin");
+    const sourceAccount = await this.getAccountForTx(signers[0], horizonUrl);
+    const tx = await this.prepareTransaction(
+      "add_pool_admin",
+      sourceAccount,
+      scvAddressVec(signers),
+      scvSymbol(poolId),
+      scvAddress(newAdmin)
+    );
+    return tx.toEnvelope().toXDR("base64");
+  }
+
+  /**
+   * Build a submittable remove_pool_admin transaction with the first signer as
+   * the proper source account.
+   *
+   * @param signers Array of Stellar public keys of the admins authorizing the change.
+   * @param poolId The ID of the pool.
+   * @param admin The Stellar public key of the admin to remove.
+   * @param horizonUrl Optional Horizon URL to use. Defaults based on the network passphrase.
+   * @returns The base64-encoded transaction envelope XDR ready for wallet signing.
+   */
+  async prepareRemovePoolAdminTx(
+    signers: string[],
+    poolId: string,
+    admin: string,
+    horizonUrl?: string
+  ): Promise<string> {
+    ensureAddressList(signers, "signers");
+    ensureNonEmptyString(poolId, "poolId");
+    ensureAddress(admin, "admin");
+    const sourceAccount = await this.getAccountForTx(signers[0], horizonUrl);
+    const tx = await this.prepareTransaction(
+      "remove_pool_admin",
+      sourceAccount,
+      scvAddressVec(signers),
+      scvSymbol(poolId),
+      scvAddress(admin)
+    );
+    return tx.toEnvelope().toXDR("base64");
+  }
+
+  /**
+   * Build a submittable update_pool_threshold transaction with the first signer
+   * as the proper source account.
+   *
+   * @param signers Array of Stellar public keys of the admins authorizing the change.
+   * @param poolId The ID of the pool.
+   * @param threshold The new signing threshold.
+   * @param horizonUrl Optional Horizon URL to use. Defaults based on the network passphrase.
+   * @returns The base64-encoded transaction envelope XDR ready for wallet signing.
+   */
+  async prepareUpdatePoolThresholdTx(
+    signers: string[],
+    poolId: string,
+    threshold: number | bigint,
+    horizonUrl?: string
+  ): Promise<string> {
+    ensureAddressList(signers, "signers");
+    ensureNonEmptyString(poolId, "poolId");
+    ensurePositiveInteger(threshold, "threshold");
+    const sourceAccount = await this.getAccountForTx(signers[0], horizonUrl);
+    const tx = await this.prepareTransaction(
+      "update_pool_threshold",
+      sourceAccount,
+      scvAddressVec(signers),
+      scvSymbol(poolId),
+      nativeToScVal(Number(threshold), { type: "u32" })
     );
     return tx.toEnvelope().toXDR("base64");
   }
@@ -2237,7 +2610,10 @@ export class LinkoraClient extends GeneratedLinkoraClient {
    * } while (cursor);
    * ```
    */
-  async fetchFollowersPage(user: string, opts?: { cursor?: string; pageSize?: number }): Promise<Page<string>> {
+  async fetchFollowersPage(
+    user: string,
+    opts?: { cursor?: string; pageSize?: number }
+  ): Promise<Page<string>> {
     return fetchPageWithCursor<string>({
       cursor: opts?.cursor,
       pageSize: opts?.pageSize,
@@ -2246,7 +2622,10 @@ export class LinkoraClient extends GeneratedLinkoraClient {
   }
 
   /** Fetch ONE page of accounts `user` follows, behind an opaque cursor. */
-  async fetchFollowingPage(user: string, opts?: { cursor?: string; pageSize?: number }): Promise<Page<string>> {
+  async fetchFollowingPage(
+    user: string,
+    opts?: { cursor?: string; pageSize?: number }
+  ): Promise<Page<string>> {
     return fetchPageWithCursor<string>({
       cursor: opts?.cursor,
       pageSize: opts?.pageSize,
@@ -2270,7 +2649,10 @@ export class LinkoraClient extends GeneratedLinkoraClient {
    * Iterate every follower of `user`, transparently walking pages behind the
    * opaque cursor (issue #1358).
    */
-  async *iterateFollowers(user: string, opts?: PaginationOptions): AsyncGenerator<string, void, unknown> {
+  async *iterateFollowers(
+    user: string,
+    opts?: PaginationOptions
+  ): AsyncGenerator<string, void, unknown> {
     yield* paginateList<string>({
       ...opts,
       cursor: opts?.cursor,
@@ -2279,7 +2661,10 @@ export class LinkoraClient extends GeneratedLinkoraClient {
   }
 
   /** Iterate every account `user` follows, transparently walking pages. */
-  async *iterateFollowing(user: string, opts?: PaginationOptions): AsyncGenerator<string, void, unknown> {
+  async *iterateFollowing(
+    user: string,
+    opts?: PaginationOptions
+  ): AsyncGenerator<string, void, unknown> {
     yield* paginateList<string>({
       ...opts,
       cursor: opts?.cursor,
@@ -2288,7 +2673,10 @@ export class LinkoraClient extends GeneratedLinkoraClient {
   }
 
   /** Iterate every post ID authored by `author`, transparently walking pages. */
-  async *iteratePostsByAuthor(author: string, opts?: PaginationOptions): AsyncGenerator<bigint, void, unknown> {
+  async *iteratePostsByAuthor(
+    author: string,
+    opts?: PaginationOptions
+  ): AsyncGenerator<bigint, void, unknown> {
     yield* paginateList<bigint>({
       ...opts,
       cursor: opts?.cursor,

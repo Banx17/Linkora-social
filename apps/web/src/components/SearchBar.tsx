@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState, useRef } from "react";
 import { validateSearchQuery } from "@/lib/validate";
 import { useSearchSuggestions, SearchSuggestion } from "@/hooks/useSearchSuggestions";
 import { useRecentSearches } from "@/hooks/useRecentSearches";
+import { useInputLatency } from "@/hooks/useInputLatency";
 
 interface SearchBarProps {
   onSearch: (query: string) => void;
@@ -40,6 +41,10 @@ export default function SearchBar({
       (forwardedInputRef as any).current = inputRef.current;
     }
   }, [forwardedInputRef]);
+
+  // Dev-only: records keystroke-to-paint time as `search-input-latency`
+  // Performance API measures and warns when a keystroke misses 16ms (#1747).
+  const recordKeystroke = useInputLatency({ name: "search-input-latency" });
 
   const { suggestions, loading, fetchSuggestions, clearSuggestions } = useSearchSuggestions();
   const { recentSearches, addRecentSearch, clearRecentSearches, removeRecentSearch } =
@@ -139,6 +144,14 @@ export default function SearchBar({
     removeRecentSearch(searchQuery);
   };
 
+  const handleRemoveRecentKeyboard = (e: React.KeyboardEvent, searchQuery: string) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.stopPropagation();
+      e.preventDefault();
+      removeRecentSearch(searchQuery);
+    }
+  };
+
   // Highlight matching text
   const highlightMatch = (text: string, search: string) => {
     if (!search.trim()) return text;
@@ -172,6 +185,7 @@ export default function SearchBar({
             type="text"
             value={query}
             onChange={(e) => {
+              recordKeystroke(e.nativeEvent);
               setIsFocused(true);
               setQuery(e.target.value);
             }}
@@ -250,71 +264,87 @@ export default function SearchBar({
           )}
 
           {currentSuggestions.map((suggestion: SearchSuggestion, index: number) => (
-            <button
+            /*
+             * Each row is a non-interactive <div role="option"> that owns the
+             * listbox option semantics. Two sibling <button> elements sit
+             * inside it: one to select the suggestion, one to remove it (recent
+             * only). This avoids the invalid HTML / hydration-mismatch caused
+             * by nesting a <button> inside another <button>.
+             */
+            <div
               key={`${suggestion.type}-${suggestion.value}-${index}`}
               id={`suggestion-${index}`}
               role="option"
               aria-selected={index === activeSuggestionIndex}
-              type="button"
-              onClick={() => handleSuggestionClick(suggestion)}
-              className={`w-full px-4 py-3 text-left hover:bg-[var(--muted)] transition-colors flex items-center gap-3 ${
+              className={`flex items-center gap-1 transition-colors ${
                 index === activeSuggestionIndex ? "bg-[var(--muted)]" : ""
-              }`}
+              } hover:bg-[var(--muted)]`}
             >
-              {/* Icon */}
-              <div className="flex-shrink-0">
-                {suggestion.type === "profile" && (
-                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center text-white text-sm font-semibold">
-                    {(suggestion.displayName || suggestion.value)[0].toUpperCase()}
-                  </div>
-                )}
-                {suggestion.type === "hashtag" && (
-                  <div className="w-8 h-8 rounded-full bg-violet-500/20 flex items-center justify-center text-violet-500">
-                    <span className="text-lg font-bold">#</span>
-                  </div>
-                )}
-                {suggestion.type === "recent" && (
-                  <div className="w-8 h-8 flex items-center justify-center text-[var(--text-muted)]">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      strokeWidth={1.5}
-                      stroke="currentColor"
-                      className="w-5 h-5"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"
-                      />
-                    </svg>
-                  </div>
-                )}
-              </div>
-
-              {/* Content */}
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium text-[var(--foreground)] truncate">
-                  {query.trim() && suggestion.type !== "recent"
-                    ? highlightMatch(suggestion.displayName || suggestion.value, query)
-                    : suggestion.displayName || suggestion.value}
+              {/* Select-suggestion button (takes up all available space) */}
+              <button
+                type="button"
+                onClick={() => handleSuggestionClick(suggestion)}
+                className="flex-1 min-w-0 px-4 py-3 text-left flex items-center gap-3"
+                tabIndex={-1}
+              >
+                {/* Icon */}
+                <div className="flex-shrink-0">
+                  {suggestion.type === "profile" && (
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center text-white text-sm font-semibold">
+                      {(suggestion.displayName || suggestion.value)[0].toUpperCase()}
+                    </div>
+                  )}
+                  {suggestion.type === "hashtag" && (
+                    <div className="w-8 h-8 rounded-full bg-violet-500/20 flex items-center justify-center text-violet-500">
+                      <span className="text-lg font-bold">#</span>
+                    </div>
+                  )}
+                  {suggestion.type === "recent" && (
+                    <div className="w-8 h-8 flex items-center justify-center text-[var(--text-muted)]">
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        strokeWidth={1.5}
+                        stroke="currentColor"
+                        className="w-5 h-5"
+                        aria-hidden="true"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"
+                        />
+                      </svg>
+                    </div>
+                  )}
                 </div>
-                {suggestion.type === "profile" && (
-                  <div className="text-xs text-[var(--text-muted)] truncate">Profile</div>
-                )}
-                {suggestion.type === "hashtag" && (
-                  <div className="text-xs text-[var(--text-muted)]">Hashtag</div>
-                )}
-              </div>
 
-              {/* Remove button for recent searches */}
+                {/* Content */}
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-[var(--foreground)] truncate">
+                    {query.trim() && suggestion.type !== "recent"
+                      ? highlightMatch(suggestion.displayName || suggestion.value, query)
+                      : suggestion.displayName || suggestion.value}
+                  </div>
+                  {suggestion.type === "profile" && (
+                    <div className="text-xs text-[var(--text-muted)] truncate">Profile</div>
+                  )}
+                  {suggestion.type === "hashtag" && (
+                    <div className="text-xs text-[var(--text-muted)]">Hashtag</div>
+                  )}
+                </div>
+              </button>
+
+              {/* Remove button — sibling, not child, of the select button */}
               {suggestion.type === "recent" && (
                 <button
                   type="button"
                   onClick={(e) => handleRemoveRecent(e, suggestion.value)}
-                  className="flex-shrink-0 p-1 text-[var(--text-muted)] hover:text-[var(--foreground)] transition-colors"
+                  onKeyDown={(e) => handleRemoveRecentKeyboard(e, suggestion.value)}
+                  className="flex-shrink-0 p-1 mr-3 text-[var(--text-muted)] hover:text-[var(--foreground)] transition-colors"
                   aria-label={`Remove ${suggestion.value} from recent searches`}
+                  tabIndex={-1}
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
@@ -323,12 +353,13 @@ export default function SearchBar({
                     strokeWidth={1.5}
                     stroke="currentColor"
                     className="w-4 h-4"
+                    aria-hidden="true"
                   >
                     <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
               )}
-            </button>
+            </div>
           ))}
         </div>
       )}

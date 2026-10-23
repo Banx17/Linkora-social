@@ -57,6 +57,23 @@ async function setConnectionState(state) {
   return setItem(StorageKey.ConnectionState, state);
 }
 
+/**
+ * #1593 — the persisted session blob carries the adapter that created it
+ * (`provider`) and the network it was established on (`network`) in addition to
+ * `{ connected, address, timestamp }`. The restore path uses `provider` to pick
+ * the right adapter instead of assuming WalletConnect for every session.
+ *
+ * @typedef {Object} ConnectionState
+ * @property {boolean} connected
+ * @property {string} address
+ * @property {number} timestamp
+ * @property {("freighter"|"walletconnect")=} provider
+ * @property {string=} network
+ */
+
+/**
+ * @returns {Promise<ConnectionState|null>}
+ */
 async function getConnectionState() {
   return getItem(StorageKey.ConnectionState);
 }

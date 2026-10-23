@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useProfile, type IndexerPost } from "@/hooks/useProfile";
 import { useWallet } from "@/hooks/useWallet";
-import { OptimisticStore, useOptimisticFollow } from "@/lib/optimisticStore";
+import { useFollowMutation } from "@/hooks/useFollowMutation";
 import {
   useLinkoraEvent,
   useWatchAddress,
@@ -14,6 +14,10 @@ import {
 } from "@/lib/LinkoraEventSubscriber";
 import { FollowDrawer } from "@/components/profile/FollowDrawer";
 import { CreatorTokenPanel } from "@/components/profile/CreatorTokenPanel";
+import { VerificationBadge } from "@/components/VerificationBadge";
+import { Address } from "@stellar/stellar-sdk";
+import { ResponsiveImage } from "@/components/ui/ResponsiveImage";
+import { ProfileHeaderSkeleton } from "@/components/skeletons";
 import {
   TransactionBuilder,
   BASE_FEE,
@@ -26,6 +30,8 @@ import { signTransaction } from "@stellar/freighter-api";
 import { LinkoraClient } from "linkora-sdk";
 import { buildSignAndSubmit } from "@/lib/tx";
 import { addToBlockedList, removeFromBlockedList } from "@/lib/blockedStore";
+import { getProfileAvatar, getProfileCover } from "@/lib/profileMedia";
+import { trackProfileViewed } from "@/lib/gtag";
 
 const CONTRACT_ID = process.env.NEXT_PUBLIC_CONTRACT_ID || "CDUMMY";
 const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL || "https://soroban-testnet.stellar.org";
@@ -43,11 +49,26 @@ const blockieUrl = (address: string) => `https://effigy.im/a/${address}.svg`;
 const truncate = (addr: string) =>
   addr.length > 10 ? `${addr.slice(0, 5)}…${addr.slice(-4)}` : addr;
 
-/** Relative time label from a ledger number (≈5 s / ledger). */
-const ledgerToRelative = (ledger: number): string => {
-  // We can't know the *exact* wall-clock time without the network, so we
-  // just show the ledger number for now.
-  return `Ledger #${ledger}`;
+/** Close time per ledger. */
+const SECONDS_PER_LEDGER = 5;
+
+/**
+ * Relative time label from a ledger number (≈5 s / ledger).
+ *
+ * When the current ledger is not known (e.g. the indexer did not report it),
+ * we fall back to displaying the ledger number itself.
+ */
+export const ledgerToRelative = (ledger: number, currentLedger?: number): string => {
+  if (!currentLedger || !ledger || ledger >= currentLedger) {
+    return currentLedger ? "just now" : `Ledger #${ledger}`;
+  }
+
+  const seconds = (currentLedger - ledger) * SECONDS_PER_LEDGER;
+
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 60 * 60) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 60 * 60 * 24) return `${Math.floor(seconds / (60 * 60))}h ago`;
+  return `${Math.floor(seconds / (60 * 60 * 24))}d ago`;
 };
 
 /* ────────────────────────────────────────────────────────────────────────── */
@@ -64,24 +85,37 @@ export default function ProfilePage() {
   const [drawerType, setDrawerType] = useState<"followers" | "following">("followers");
   const [copyFeedback, setCopyFeedback] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [followLoading, setFollowLoading] = useState(false);
   const [isBlocked, setIsBlocked] = useState(false);
   const [blocking, setBlocking] = useState(false);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [coverUrl, setCoverUrl] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // Uploaded profile images are stored locally until the on-chain profile
+  // model carries them (see ProfileImageUploader / profileMedia).
+  useEffect(() => {
+    if (!address) return;
+    setAvatarUrl(getProfileAvatar(address));
+    setCoverUrl(getProfileCover(address));
+  }, [address]);
 
   /* ── Optimistic follow state ────────────────────────────────────────── */
 
-  const followState = useOptimisticFollow(currentUserAddress, address, {
-    isFollowing: state.status === "success" ? state.data.isFollowing : false,
-    followersCount: state.status === "success" ? state.data.followersCount : 0,
-    followingCount: state.status === "success" ? state.data.followingCount : 0,
+  // Optimistic follow: the button and follower count flip on click, the
+  // Stellar transaction runs in the background, and a failure rolls both back
+  // with a descriptive toast.
+  const followMutation = useFollowMutation({
+    follower: currentUserAddress,
+    followee: address,
+    initialIsFollowing: state.status === "success" ? state.data.isFollowing : false,
+    initialFollowersCount: state.status === "success" ? state.data.followersCount : 0,
+    initialFollowingCount: state.status === "success" ? state.data.followingCount : 0,
+    onConfirmed: () => {
+      // Chain now agrees with the optimistic value; refresh indexer truth.
+      void refetch();
+    },
   });
-
-  //  const followState_2 = useOptimisticFollow(currentUserAddress, address, {
-  //   isFollowing: state.status === "success" ? state.data.isFollowing : false,
-  //   followersCount: state.status === "success" ? state.data.followersCount : 0,
-  //   followingCount: state.status === "success" ? state.data.followingCount : 0,
-  // });
+  const followState = followMutation.state;
 
   /* ── Live event subscriptions ───────────────────────────────────────── */
 
@@ -103,80 +137,16 @@ export default function ProfilePage() {
     refetch();
   });
 
-  /* ── Follow / unfollow ──────────────────────────────────────────────── */
+  /* ── Track profile view ──────────────────────────────────────────────── */
 
-  const handleFollowToggle = useCallback(async () => {
-    if (!currentUserAddress || followLoading) return;
-
-    const key = `${currentUserAddress}:${address}`;
-    const newIsFollowing = !followState.isFollowing;
-
-    // Optimistic UI update
-    OptimisticStore.setFollowState(key, {
-      isFollowing: newIsFollowing,
-      followersCount: followState.followersCount + (newIsFollowing ? 1 : -1),
-      followingCount: followState.followingCount,
-    });
-
-    setFollowLoading(true);
-
-    try {
-      const server = new StellarRpc.Server(RPC_URL);
-      const account = await server.getAccount(currentUserAddress);
-
-      const contract = new Contract(CONTRACT_ID);
-      const op = contract.call(
-        newIsFollowing ? "follow" : "unfollow",
-        Address.fromString(currentUserAddress).toScVal(),
-        Address.fromString(address).toScVal()
-      );
-
-      const tx = new TransactionBuilder(account, {
-        fee: BASE_FEE,
-        networkPassphrase: NETWORK_PASSPHRASE,
-      })
-        .addOperation(op)
-        .setTimeout(30)
-        .build();
-
-      const simulated = await server.simulateTransaction(tx);
-      if (StellarRpc.Api.isSimulationError(simulated)) {
-        throw new Error(`Simulation failed: ${simulated.error}`);
-      }
-
-      const finalTx = StellarRpc.assembleTransaction(tx, simulated).build();
-      const xdrString = finalTx.toXDR();
-
-      const signedXdr = await signTransaction(xdrString, {
-        networkPassphrase: NETWORK_PASSPHRASE,
+  useEffect(() => {
+    if (state.status === "success") {
+      trackProfileViewed({
+        profileAddress: address,
+        isSelf: currentUserAddress === address,
       });
-
-      const signedTx = TransactionBuilder.fromXDR(signedXdr, NETWORK_PASSPHRASE);
-      const sendResponse = await server.sendTransaction(signedTx);
-
-      if (sendResponse.status === "ERROR") {
-        throw new Error("Transaction failed to submit");
-      }
-
-      let status: string = sendResponse.status;
-      const startTime = Date.now();
-      while (status === "PENDING" && Date.now() - startTime < 30000) {
-        await new Promise((r) => setTimeout(r, 1000));
-        const txResponse = await server.getTransaction(sendResponse.hash);
-        status = txResponse.status as string;
-      }
-    } catch (error) {
-      console.error("Follow/unfollow failed:", error);
-      // Rollback optimistic update
-      OptimisticStore.setFollowState(key, {
-        isFollowing: !newIsFollowing,
-        followersCount: followState.followersCount,
-        followingCount: followState.followingCount,
-      });
-    } finally {
-      setFollowLoading(false);
     }
-  }, [currentUserAddress, address, followState, followLoading]);
+  }, [state.status, address, currentUserAddress]);
 
   /* ── Check if blocked ──────────────────────────────────────────────── */
 
@@ -285,13 +255,9 @@ export default function ProfilePage() {
 
   if (state.status === "loading") {
     return (
-      <div className="flex h-screen items-center justify-center bg-[var(--bg-primary)]">
-        <div className="animate-pulse flex space-x-4 w-80">
-          <div className="rounded-full bg-[var(--bg-tertiary)] h-14 w-14 shrink-0" />
-          <div className="flex-1 space-y-3 py-1">
-            <div className="h-4 bg-[var(--bg-tertiary)] rounded w-3/4" />
-            <div className="h-4 bg-[var(--bg-tertiary)] rounded w-1/2" />
-          </div>
+      <div className="min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
+        <div className="mx-auto max-w-4xl p-4 md:p-8">
+          <ProfileHeaderSkeleton />
         </div>
       </div>
     );
@@ -317,11 +283,26 @@ export default function ProfilePage() {
   }
 
   const { profile, posts, postsHasMore, creatorTokenBalance, totalTipsReceived } = state.data;
+  const { isVerified, verificationLevel } = state.data;
   const isSelf = currentUserAddress === address;
 
   return (
     <div className="min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
       <div className="max-w-4xl mx-auto p-4 md:p-8">
+        {coverUrl && (
+          <div className="relative mb-4 h-40 overflow-hidden rounded-2xl border border-[var(--bg-tertiary)] md:h-56">
+            <ResponsiveImage
+              src={coverUrl}
+              alt={`${profile.username}'s cover image`}
+              fill
+              priority
+              sizes="(min-width: 896px) 832px, 100vw"
+              className="object-cover"
+              id="profile-cover"
+            />
+          </div>
+        )}
+
         {/* ── Profile header ───────────────────────────────────────────── */}
         <section
           id="profile-header"
@@ -329,17 +310,30 @@ export default function ProfilePage() {
           className="flex flex-col md:flex-row items-start md:items-center gap-4 md:gap-6 bg-[var(--bg-secondary)] p-4 md:p-6 rounded-2xl border border-[var(--bg-tertiary)]"
         >
           {/* Avatar */}
-          <img
-            src={blockieUrl(address)}
+          <ResponsiveImage
+            src={avatarUrl ?? blockieUrl(address)}
             alt={`${profile.username}'s avatar`}
-            className="w-24 h-24 rounded-full border-4 border-[var(--bg-primary)]"
+            width={96}
+            height={96}
+            priority
+            sizes="96px"
+            className="w-24 h-24 rounded-full border-4 border-[var(--bg-primary)] object-cover"
             id="profile-avatar"
           />
 
           {/* Name / address / bio */}
           <div className="flex-1 min-w-0">
-            <h1 id="profile-username" className="text-3xl font-bold truncate">
-              {profile.username}
+            <h1
+              id="profile-username"
+              className="flex items-center gap-2 text-3xl font-bold truncate"
+            >
+              <span className="truncate">{profile.username}</span>
+              {isVerified && (
+                <VerificationBadge
+                  level={verificationLevel ?? "identity"}
+                  subject={profile.username}
+                />
+              )}
             </h1>
 
             <p className="text-[var(--text-muted)] font-mono text-sm mt-1 flex items-center gap-2">
@@ -390,9 +384,11 @@ export default function ProfilePage() {
             {!isSelf && currentUserAddress && (
               <>
                 <button
-                  onClick={handleFollowToggle}
+                  onClick={() => followMutation.toggle()}
+                  disabled={followMutation.isPending}
+                  aria-busy={followMutation.isPending}
                   id="follow-btn"
-                  className={`w-full sm:w-auto px-6 py-2 rounded-full font-bold transition-all ${
+                  className={`w-full sm:w-auto px-6 py-2 rounded-full font-bold transition-all disabled:cursor-wait ${
                     followState.isFollowing
                       ? "bg-transparent border border-[var(--text-muted)] text-[var(--text-primary)] hover:bg-[var(--error)] hover:border-[var(--error)] hover:text-white"
                       : "bg-[var(--accent-coral)] text-white hover:opacity-90"
@@ -404,6 +400,9 @@ export default function ProfilePage() {
                   }
                 >
                   {followState.isFollowing ? "Following" : "Follow"}
+                  {followMutation.isPending && (
+                    <span className="ml-2 text-xs font-normal opacity-80">…</span>
+                  )}
                 </button>
 
                 {/* Overflow menu trigger */}
@@ -553,7 +552,14 @@ function PostCard({ post }: { post: IndexerPost }) {
       aria-label={`Post ${post.id}`}
     >
       <div className="flex items-center gap-3 mb-3">
-        <img src={blockieUrl(post.author)} alt="" className="w-8 h-8 rounded-full" />
+        <ResponsiveImage
+          src={blockieUrl(post.author)}
+          alt=""
+          width={32}
+          height={32}
+          sizes="32px"
+          className="w-8 h-8 rounded-full"
+        />
         <span className="font-mono text-sm text-[var(--text-muted)]">{truncate(post.author)}</span>
         <span className="text-xs text-[var(--text-muted)] ml-auto">
           {ledgerToRelative(post.created_ledger)}

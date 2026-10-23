@@ -8,6 +8,7 @@ import { z } from "zod";
 import { cursorPaginationSchema, numericIdStringSchema } from "@linkora/types/src/schemas";
 import { notFoundError, internalError } from "@linkora/types/src/errors";
 import { MediaUploadConfig } from "../../config";
+import { logger } from "../../logger";
 import { Database } from "../../db";
 
 const listPostsQuerySchema = cursorPaginationSchema.extend({
@@ -260,7 +261,7 @@ export function createPostsRouter(
         stream.end(file.content);
       });
     } catch (error) {
-      console.error("Failed to persist media upload:", error);
+      logger.error({ err: error }, "Failed to persist media upload");
       const err = internalError("Failed to persist media upload");
       res.status(err.statusCode).json(err.toJSON(req.context?.requestId));
       return;
@@ -328,7 +329,7 @@ export function createPostsRouter(
           total: reports.length,
         });
       } catch (error) {
-        console.error(`Error fetching reports for post ${postId}:`, error);
+        logger.error({ postId: postId.toString(), err: error }, "Failed to fetch reports");
         const err = internalError("Failed to fetch reports");
         res.status(err.statusCode).json(err.toJSON(req.context?.requestId));
       }

@@ -146,17 +146,20 @@ export async function sendRelayMessage(
 }
 
 /**
- * Fetch all messages for the conversation between myAddress and theirAddress.
+ * Fetch messages for the conversation between myAddress and theirAddress.
  * The conversation ID is derived from sorted addresses, matching the relay
  * server's own computation in services/dm-relay/routes.ts.
+ * Supports pagination via `before` cursor (message_index).
  */
 export async function fetchRelayMessages(
   myAddress: string,
   theirAddress: string,
-  limit = 50
+  options: { limit?: number; before?: string } = {}
 ): Promise<RelayMessage[]> {
+  const { limit = 50, before } = options;
   const conversationId = createConversationId(myAddress, theirAddress);
   const params = new URLSearchParams({ limit: String(limit) });
+  if (before) params.set("before", before);
 
   const res = await fetch(`${RELAY_URL}/api/messages/${conversationId}?${params}`);
 
@@ -251,8 +254,8 @@ export async function checkPeerKeyRotation(
 export async function fetchMessagesWithRotationCheck(
   myAddress: string,
   theirAddress: string,
-  limit = 50
+  options: { limit?: number; before?: string } = {}
 ): Promise<RelayMessage[]> {
   await checkPeerKeyRotation(myAddress, theirAddress);
-  return fetchRelayMessages(myAddress, theirAddress, limit);
+  return fetchRelayMessages(myAddress, theirAddress, options);
 }

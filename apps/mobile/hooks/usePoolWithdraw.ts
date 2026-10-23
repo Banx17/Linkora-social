@@ -40,13 +40,18 @@ export interface UsePoolWithdrawReturn {
  * usePoolWithdraw
  *
  * #1557 — approvals are wallet signatures, not list entries. There is no API
- * to approve on another admin's behalf: `signApproval` builds an approval
- * transaction for the connected address and submits it through `useSubmitTx`,
- * so the only approval the UI can express is one the connected wallet signed
- * on-chain. The withdrawal itself goes to the contract as a threshold set of
- * those signatures and is recorded locally only after the chain confirms, and
- * `canSubmit` fails closed whenever the admin set is not chain-sourced or the
- * connected wallet is not a known admin.
+ * to approve on another admin's behalf: `signApproval` builds and submits a real
+ * `pool_withdraw` invocation for the connected address, so the only approval the
+ * UI can express is one the connected wallet signed on-chain. The withdrawal
+ * itself goes to the contract as a threshold set of those signatures and is
+ * recorded locally only after the chain confirms, and `canSubmit` fails closed
+ * whenever the admin set is not chain-sourced or the connected wallet is not a
+ * known admin.
+ *
+ * #1591 — every path through `useSubmitTx` now yields real, simulated XDR and a
+ * hash the chain confirmed. The contract has no `pool_withdraw_approve`
+ * entrypoint, so no descriptor of that name is emitted; a descriptor that cannot
+ * be turned into a real transaction is rejected outright.
  */
 export function usePoolWithdraw(poolId: string): UsePoolWithdrawReturn {
   const pool = usePoolRecord(poolId);
@@ -120,11 +125,20 @@ export function usePoolWithdraw(poolId: string): UsePoolWithdrawReturn {
       return false;
     }
 
+    if (recipientError !== null || !amount.trim()) {
+      setStatus(recipientError ?? "Enter a withdrawal amount.");
+      return false;
+    }
+
     try {
-      // The wallet signs (and broadcasts) this admin's approval; the resulting
-      // on-chain proof is what the contract will verify.
+      // #1591 — the contract exposes no `pool_withdraw_approve` entrypoint. The
+      // only real on-chain action an admin can take is a `pool_withdraw`
+      // invocation they sign themselves, so that is what is built and submitted
+      // here. The returned hash is the genuine on-chain proof of this admin's
+      // consent; a pool whose threshold exceeds one admin will be rejected by
+      // the contract, and that real failure is surfaced rather than faked.
       const signature = await submitTx(
-        `pool_withdraw_approve:${poolId}:${connectedAddress}:${recipient.trim()}:${amount.trim()}`
+        `pool_withdraw:${poolId}:${normalizeAddress(recipient)}:${amount.trim()}:${connectedAddress}=pending`
       );
 
       setApprovals((current) => [
@@ -136,7 +150,7 @@ export function usePoolWithdraw(poolId: string): UsePoolWithdrawReturn {
       setStatus(error instanceof Error ? error.message : "Approval failed. Please try again.");
       return false;
     }
-  }, [amount, connectedAddress, connectedIsAdmin, poolId, recipient, submitTx]);
+  }, [amount, connectedAddress, connectedIsAdmin, poolId, recipient, recipientError, submitTx]);
 
   const submit = useCallback(async (): Promise<string | null> => {
     setStatus(null);

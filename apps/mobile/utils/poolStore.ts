@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 import { getIndexerBaseUrl } from "./indexerConfig";
+import { getPoolCatalogEntry } from "./poolCatalog";
 
 export interface PoolApproval {
   /** Admin who signed. Always the connected wallet — never typed in. */
@@ -43,29 +44,25 @@ export interface PoolRecord {
   source: PoolStateSource;
 }
 
-const POOL_FIXTURES: Record<
-  string,
-  Pick<PoolRecord, "name" | "description" | "token" | "balance">
-> = {
-  "creator-fund": {
-    name: "Creator Fund",
-    description: "Shared treasury for emerging creators",
-    token: "XLM",
-    balance: "18,240 XLM",
-  },
-  "music-drops": {
-    name: "Music Drops",
-    description: "Funding pool for independent releases",
-    token: "NOVA",
-    balance: "7,900 NOVA",
-  },
-  "design-guild": {
-    name: "Design Guild",
-    description: "Collective pool for visual artists",
-    token: "ATLAS",
-    balance: "3,450 ATLAS",
-  },
-};
+/**
+ * #1592 — display metadata is read from the canonical catalog instead of a
+ * private copy of it. The old `POOL_FIXTURES` literal here duplicated the
+ * catalog (and drifted from the ids the Pools tab actually rendered), so a
+ * pool could be known to one module and unknown to another.
+ */
+function getPoolFixture(
+  poolId: string
+): Pick<PoolRecord, "name" | "description" | "token" | "balance"> | undefined {
+  const entry = getPoolCatalogEntry(poolId);
+  if (!entry) return undefined;
+
+  return {
+    name: entry.name,
+    description: entry.description,
+    token: entry.token,
+    balance: entry.balance,
+  };
+}
 
 const poolCache = new Map<string, PoolRecord>();
 const listeners = new Set<() => void>();
@@ -82,7 +79,7 @@ function clonePool(pool: PoolRecord): PoolRecord {
 }
 
 function createPoolRecord(id: string): PoolRecord {
-  const fixture = POOL_FIXTURES[id];
+  const fixture = getPoolFixture(id);
 
   // #1557 — no hard-coded admin list. The old fixture shipped three sample
   // addresses and a threshold of 2, which made a pool look governed by people

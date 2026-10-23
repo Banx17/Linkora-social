@@ -41,16 +41,11 @@ export default function CreatePostScreen() {
     setSubmitting(true);
 
     try {
-      const optimisticPost = await addOptimisticPost({
-        author: address,
-        username: "me",
-        content: trimmed,
-        tip_total: 0,
-      });
+      const localId = await addOptimisticPost(address, trimmed, "me");
 
       if (requestId) {
         resolvePendingRequest(requestId, {
-          postId: optimisticPost.id,
+          postId: localId,
           content: trimmed,
           pending: true,
         });

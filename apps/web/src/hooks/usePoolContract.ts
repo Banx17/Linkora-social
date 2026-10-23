@@ -152,6 +152,41 @@ async function callCreatePool(
   return { hash };
 }
 
+// ── Deposit submission ────────────────────────────────────────────────────────
+
+export interface PoolDepositParams {
+  depositor: string;
+  poolId: string;
+  token: string;
+  /** Amount as entered by the user, e.g. "12.5". */
+  amountRaw: string;
+  decimals: number;
+  contractAddress: string;
+}
+
+/**
+ * Runs the two-step deposit (allowance, then `pool_deposit`) and reports each
+ * phase so the UI can keep the user informed.
+ *
+ * Rejects with a descriptive error when either step fails, which lets the
+ * optimistic mutation roll back its pending badge.
+ */
+export async function submitPoolDeposit(
+  params: PoolDepositParams,
+  onPhase?: (phase: TxStatus) => void
+): Promise<TxResult> {
+  const { depositor, poolId, token, amountRaw, decimals, contractAddress } = params;
+  const amount = parseTokenAmount(amountRaw, decimals);
+
+  // Step 1: increase_allowance for the SEP-41 token
+  onPhase?.("approving");
+  await callIncreaseAllowance(depositor, token, amount, contractAddress);
+
+  // Step 2: pool_deposit
+  onPhase?.("awaiting_sig");
+  return callPoolDeposit(depositor, poolId, token, amount, () => onPhase?.("submitting"));
+}
+
 // ── useDeposit ────────────────────────────────────────────────────────────────
 
 export function useDeposit() {
@@ -173,15 +208,9 @@ export function useDeposit() {
       setResult(null);
 
       try {
-        const amount = parseTokenAmount(amountRaw, decimals);
-
-        // Step 1: increase_allowance for the SEP-41 token
-        await callIncreaseAllowance(depositor, token, amount, contractAddress);
-
-        // Step 2: pool_deposit
-        setStatus("awaiting_sig");
-        const tx = await callPoolDeposit(depositor, poolId, token, amount, () =>
-          setStatus("submitting")
+        const tx = await submitPoolDeposit(
+          { depositor, poolId, token, amountRaw, decimals, contractAddress },
+          setStatus
         );
         setResult(tx);
         setStatus("success");

@@ -18,7 +18,7 @@ interface PollOption {
 }
 
 interface RichTextComposerProps {
-  onSubmit: (content: string, attachments?: File[], poll?: PollOption[]) => void;
+  onSubmit: (content: string, attachments?: File[], poll?: PollOption[]) => Promise<void>;
   onCancel?: () => void;
   placeholder?: string;
   disabled?: boolean;
@@ -252,8 +252,12 @@ export function RichTextComposer({
         : undefined;
       await onSubmit(content, attachments.length > 0 ? attachments : undefined, pollData);
 
-      // Reset form
+      // Reset form only after submission resolves successfully — keeps the draft
+      // intact if the submission rejects (e.g. network error).
       setContent("");
+      if (editorRef.current) {
+        editorRef.current.innerText = "";
+      }
       setAttachments([]);
       setAttachmentPreviews([]);
       setShowPoll(false);
@@ -262,6 +266,11 @@ export function RichTextComposer({
         { id: "2", text: "" },
       ]);
       setShowPreview(false);
+    } catch (err) {
+      // Surface the error — draft content and attachments are preserved so the
+      // user can retry without losing their work.
+      console.error("[RichTextComposer] submit failed:", err);
+      throw err;
     } finally {
       setIsSubmitting(false);
     }

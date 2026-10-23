@@ -73,6 +73,24 @@
   --space-lg: 24px;
   --space-xl: 32px;
   --space-2xl: 48px;
+
+  /* Skeleton shimmer — mirrors docs/design/tokens.css.
+   * The animation is expressed as a custom property so the entire shimmer
+   * can be paused by overriding one variable under prefers-reduced-motion.
+   */
+  --skeleton-gradient: linear-gradient(
+    90deg,
+    var(--color-surface-1) 0%,
+    var(--color-surface-2) 50%,
+    var(--color-surface-1) 100%
+  );
+  --skeleton-background-size: 200% 100%;
+  --skeleton-shimmer-duration: 1.5s;
+  --skeleton-shimmer-easing: linear;
+  --skeleton-shimmer-animation: shimmer
+    var(--skeleton-shimmer-duration)
+    var(--skeleton-shimmer-easing)
+    infinite;
   color-scheme: light;
 }
 
@@ -308,6 +326,34 @@ body {
   border-color: var(--accent-primary, #60A5FA) !important;
 }
 
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* Base placeholder used by every skeleton variant.
+ * Colours and motion come exclusively from the tokens above.
+ */
+.skeleton {
+  display: block;
+  flex-shrink: 0;
+  background-color: var(--color-surface-2);
+  background-image: var(--skeleton-gradient);
+  background-size: var(--skeleton-background-size);
+  background-repeat: no-repeat;
+  animation: var(--skeleton-shimmer-animation);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --skeleton-shimmer-animation: none;
+  }
+}
+
 .skeleton-card {
   background: var(--bg-card, #1E293B);
   border: 1px solid var(--border, #334155);
@@ -321,17 +367,21 @@ body {
   width: 42px;
   height: 42px;
   border-radius: 50%;
-  background: linear-gradient(90deg, #1E293B 25%, #334155 50%, #1E293B 75%);
-  background-size: 200% 100%;
-  animation: shimmer 1.5s infinite;
+  background-color: var(--color-surface-2);
+  background-image: var(--skeleton-gradient);
+  background-size: var(--skeleton-background-size);
+  background-repeat: no-repeat;
+  animation: var(--skeleton-shimmer-animation);
 }
 
 .skeleton-line {
   height: 12px;
   border-radius: 6px;
-  background: linear-gradient(90deg, #1E293B 25%, #334155 50%, #1E293B 75%);
-  background-size: 200% 100%;
-  animation: shimmer 1.5s infinite;
+  background-color: var(--color-surface-2);
+  background-image: var(--skeleton-gradient);
+  background-size: var(--skeleton-background-size);
+  background-repeat: no-repeat;
+  animation: var(--skeleton-shimmer-animation);
 }
 
 /* Mobile safe-area handling — clears the fixed BottomNav on notched devices */

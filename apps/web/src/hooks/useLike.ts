@@ -1,17 +1,16 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
-import { useWallet } from "@/components/WalletProvider";
-import { classifyError } from "./usePoolContract";
+/**
+ * Backwards-compatible like button hook.
+ *
+ * The optimistic lifecycle lives in `useLikeMutation` (TanStack Query
+ * `useMutation` + `onMutate`/`onError` rollback). This wrapper keeps the
+ * original `useLike` API used by older components.
+ */
 
-// ── Mock contract client ──────────────────────────────────────────────────────
-// Replace the body with the real SDK call once the generated client is wired up
-// (packages/sdk). Liking is idempotent on-chain: a second call by the same liker
-// is rejected, which is why the UI disables the button after the first like.
-async function contractLikePost(_liker: string, _postId: number): Promise<void> {
-  // TODO: replace with: await client.like_post({ liker, post_id: postId })
-  await new Promise((resolve) => setTimeout(resolve, 600));
-}
+import type { LikeState } from "@/lib/optimisticStore";
+import { submitLikeTransaction } from "@/lib/likeTransaction";
+import { useLikeMutation } from "./useLikeMutation";
 
 export interface UseLikeOptions {
   postId: number;
@@ -19,6 +18,9 @@ export interface UseLikeOptions {
   initialHasLiked?: boolean;
   /** The post's current like count, used to seed the optimistic counter. */
   initialLikeCount: number;
+  /** Injected submitter, primarily for tests. */
+  submitLike?: (user: string, postId: string | number) => Promise<unknown>;
+  onConfirmed?: (state: LikeState) => void;
 }
 
 export interface UseLikeResult {
@@ -35,67 +37,29 @@ export interface UseLikeResult {
   like: () => Promise<boolean>;
 }
 
-/**
- * Drives the like button on a post with optimistic UI.
- *
- * - Initial state is derived from `has_liked` (`initialHasLiked`).
- * - The count increments immediately on click, before the network round-trip.
- * - On transaction failure the optimistic update is rolled back.
- * - Once liked, the action becomes a no-op so the button can stay disabled.
- */
 export function useLike({
   postId,
   initialHasLiked = false,
   initialLikeCount,
+  submitLike,
+  onConfirmed,
 }: UseLikeOptions): UseLikeResult {
-  const { publicKey } = useWallet();
-  const [liked, setLiked] = useState(initialHasLiked);
-  const [likeCount, setLikeCount] = useState(initialLikeCount);
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const mutation = useLikeMutation({
+    postId,
+    initialHasLiked,
+    initialLikeCount,
+    submitLike,
+    onConfirmed,
+  });
 
-  // Re-seed state when the hook is reused for a different post (e.g. a detail
-  // page that swaps the post in place rather than remounting).
-  const lastPostId = useRef(postId);
-  useEffect(() => {
-    if (lastPostId.current === postId) return;
-    lastPostId.current = postId;
-    setLiked(initialHasLiked);
-    setLikeCount(initialLikeCount);
-    setPending(false);
-    setError(null);
-  }, [postId, initialHasLiked, initialLikeCount]);
-
-  const like = useCallback(async (): Promise<boolean> => {
-    // Idempotent: ignore if already liked or a request is mid-flight.
-    if (liked || pending) return false;
-    if (!publicKey) {
-      setError("Connect your wallet to like posts");
-      return false;
-    }
-
-    setPending(true);
-    setError(null);
-
-    // Optimistic update — reflect the like before the round-trip completes.
-    setLiked(true);
-    setLikeCount((c) => c + 1);
-
-    try {
-      await contractLikePost(publicKey, postId);
-      return true;
-    } catch (err) {
-      // Roll back the optimistic update on transaction failure.
-      setLiked(false);
-      setLikeCount((c) => c - 1);
-      setError(classifyError(err));
-      return false;
-    } finally {
-      setPending(false);
-    }
-  }, [liked, pending, publicKey, postId]);
-
-  return { liked, likeCount, pending, error, like };
+  return {
+    liked: mutation.liked,
+    likeCount: mutation.likeCount,
+    pending: mutation.pending,
+    error: mutation.error,
+    like: mutation.like,
+  };
 }
 
-export { contractLikePost };
+/** @deprecated use `submitLikeTransaction` from `@/lib/likeTransaction`. */
+export const contractLikePost = submitLikeTransaction;

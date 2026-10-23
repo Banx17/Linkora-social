@@ -196,7 +196,14 @@ proptest! {
             }
             let amount = ((current * frac as i128) / 100).max(1).min(current);
             let recipient = Address::generate(&env);
-            client.pool_withdraw(&soroban_sdk::vec![&env, admin.clone()], &pool_id, &amount, &recipient);
+            client.pool_withdraw(
+                &soroban_sdk::vec![&env, admin.clone()],
+                &pool_id,
+                &amount,
+                &recipient,
+                &None,
+                &None,
+            );
             expected_balance -= amount;
         }
 

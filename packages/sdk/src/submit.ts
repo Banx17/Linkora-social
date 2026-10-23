@@ -13,6 +13,7 @@ import { TransactionQueue } from "./queue.js";
 import type { LinkoraClient } from "./client.js";
 import { checkSorobanLimits } from "./utils/retry.js";
 import { ValidationError } from "./errors.js";
+import { validateTransactionSource } from "./tx-builder.js";
 
 /**
  * Adapter that wraps rpc.Server to implement the RpcClient interface.

@@ -17,7 +17,6 @@ describe("useWallet", () => {
       connect: jest.fn(),
       disconnect: jest.fn(),
       refresh: jest.fn(),
-      setNetwork: jest.fn(),
     };
 
     (useWalletContext as jest.Mock).mockReturnValue(mockContext);
@@ -33,7 +32,6 @@ describe("useWallet", () => {
     expect(typeof result.current.connect).toBe("function");
     expect(typeof result.current.disconnect).toBe("function");
     expect(typeof result.current.refresh).toBe("function");
-    expect(typeof result.current.setNetwork).toBe("function");
 
     const keys = Object.keys(result.current).sort();
     expect(keys).toEqual([
@@ -44,7 +42,6 @@ describe("useWallet", () => {
       "error",
       "network",
       "refresh",
-      "setNetwork",
       "state",
       "wallet",
     ]);
@@ -60,7 +57,6 @@ describe("useWallet", () => {
       connect: jest.fn(),
       disconnect: jest.fn(),
       refresh: jest.fn(),
-      setNetwork: jest.fn(),
     };
 
     (useWalletContext as jest.Mock).mockReturnValue(mockContext);

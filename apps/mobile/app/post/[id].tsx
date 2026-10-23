@@ -80,10 +80,20 @@ export default function PostDetailScreen() {
 
   const isAuthor = Boolean(post && address === post.author);
 
+  // #1595 — share copies to the clipboard, which can fail (permissions,
+  // unavailable module). Never let it reject silently.
   const handleShare = async () => {
     if (!post) return;
-    await Clipboard.setStringAsync(`linkora://post/${post.id}`);
-    showToast({ kind: "success", title: "Copied!", message: "Post link copied to clipboard." });
+    try {
+      await Clipboard.setStringAsync(`linkora://post/${post.id}`);
+      showToast({ kind: "success", title: "Copied!", message: "Post link copied to clipboard." });
+    } catch {
+      showToast({
+        kind: "error",
+        title: "Couldn't copy",
+        message: "Copying the post link failed. Please try again.",
+      });
+    }
   };
 
   const handleDeletePress = () => {
@@ -158,43 +168,40 @@ export default function PostDetailScreen() {
       <View style={[styles.container, styles.content]}>
         <Text style={styles.label}>Post</Text>
         <Text style={styles.id}>#{post.id}</Text>
-      <View style={styles.card}>
-        <View style={styles.header}>
-          <Text style={styles.username}>{post.username}</Text>
-          <Text style={styles.author}>{post.author}</Text>
+        <View style={styles.card}>
+          <View style={styles.header}>
+            <Text style={styles.username}>{post.username}</Text>
+            <Text style={styles.author}>{post.author}</Text>
+          </View>
+          <Text style={styles.contentText}>{post.content}</Text>
+          <Text style={styles.stats}>
+            Likes {post.like_count} | Tips {post.tip_total}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Share post link"
+            onPress={handleShare}
+            style={({ pressed }) => [styles.shareButton, pressed && styles.shareButtonPressed]}
+          >
+            <Text style={styles.shareButtonText}>Share</Text>
+          </Pressable>
         </View>
-        <Text style={styles.contentText}>{post.content}</Text>
-        <Text style={styles.stats}>
-          Likes {post.like_count} | Tips {post.tip_total}
-        </Text>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Share post link"
-          onPress={handleShare}
-          style={({ pressed }) => [
-            styles.shareButton,
-            pressed && styles.shareButtonPressed,
-          ]}
-        >
-          <Text style={styles.shareButtonText}>Share</Text>
-        </Pressable>
-      </View>
 
-      {isAuthor ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Delete post"
-          disabled={deleting}
-          onPress={handleDeletePress}
-          style={({ pressed }) => [
-            styles.deleteButton,
-            deleting && styles.deleteButtonDisabled,
-            pressed && !deleting && styles.deleteButtonPressed,
-          ]}
-        >
-          <Text style={styles.deleteButtonText}>{deleting ? "Deleting..." : "Delete post"}</Text>
-        </Pressable>
-      ) : null}
+        {isAuthor ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Delete post"
+            disabled={deleting}
+            onPress={handleDeletePress}
+            style={({ pressed }) => [
+              styles.deleteButton,
+              deleting && styles.deleteButtonDisabled,
+              pressed && !deleting && styles.deleteButtonPressed,
+            ]}
+          >
+            <Text style={styles.deleteButtonText}>{deleting ? "Deleting..." : "Delete post"}</Text>
+          </Pressable>
+        ) : null}
       </View>
     </>
   );

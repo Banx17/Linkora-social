@@ -66,6 +66,27 @@ export const followCountDriftTotal = new Counter(
   "Number of profiles whose indexed follow count differs from follows"
 );
 
+export const notificationsPrunedTotal = new Counter(
+  "notifications_pruned_total",
+  "Number of sent_notification rows deleted by the retention job"
+);
+
+export const deadLetterEventsTotal = new Counter(
+  "dead_letter_events_total",
+  "Number of events routed to the dead-letter queue"
+);
+
+export const processingLagMs = new Map<string, { total: number; count: number }>();
+
+export function recordProcessingLag(eventType: string, lagMs: number): void {
+  if (!processingLagMs.has(eventType)) {
+    processingLagMs.set(eventType, { total: 0, count: 0 });
+  }
+  const stats = processingLagMs.get(eventType)!;
+  stats.total += lagMs;
+  stats.count += 1;
+}
+
 export const streamHealth = {
   started: false,
   open: false,
@@ -78,15 +99,26 @@ export const streamHealth = {
 };
 
 export function metricsText(): string {
-  return [
+  const lines = [
     serializationRetriesTotal,
     scoreRefreshDeferredTotal,
     streamCircuitTripsTotal,
     notificationPushFailuresTotal,
     notificationPushRetriesTotal,
     followCountDriftTotal,
+    notificationsPrunedTotal,
+    deadLetterEventsTotal,
   ]
-    .map((metric) => metric.toPrometheus())
+    .map((metric) => metric.toPrometheus());
+
+  for (const [eventType, stats] of processingLagMs.entries()) {
+    const avgLag = stats.count > 0 ? stats.total / stats.count : 0;
+    lines.push(`# HELP processing_lag_ms_${eventType} Average processing lag for ${eventType} events\n`);
+    lines.push(`# TYPE processing_lag_ms_${eventType} gauge\n`);
+    lines.push(`processing_lag_ms_${eventType} ${avgLag}\n`);
+  }
+
+  return lines
     .concat(
       `indexer_stream_open ${streamHealth.open ? 1 : 0}\n`,
       `indexer_last_ingested_ledger ${streamHealth.lastIngestedLedger}\n`,

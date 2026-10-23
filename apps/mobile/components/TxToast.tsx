@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef } from "react";
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Animated,
   Linking,
@@ -61,6 +62,16 @@ export function TxToast({ toast, onDismiss, onPauseChange, theme }: TxToastProps
     ]).start();
   }, [opacity, translateY]);
 
+  // #1595 — a transient toast is not part of the reading order, so an error
+  // shown after a failed clipboard/settings action must be announced explicitly
+  // (VoiceOver) rather than only rendered. TalkBack gets the liveRegion below.
+  useEffect(() => {
+    if (toast.kind === "error") {
+      const announcement = [toast.title, toast.message].filter(Boolean).join(". ");
+      AccessibilityInfo.announceForAccessibility(announcement);
+    }
+  }, [toast.id, toast.kind, toast.title, toast.message]);
+
   const panResponder = useMemo(
     () =>
       PanResponder.create({
@@ -90,6 +101,7 @@ export function TxToast({ toast, onDismiss, onPauseChange, theme }: TxToastProps
   return (
     <Animated.View
       testID="toast"
+      accessibilityLiveRegion={toast.kind === "error" ? "assertive" : "polite"}
       style={[
         styles.toast,
         {

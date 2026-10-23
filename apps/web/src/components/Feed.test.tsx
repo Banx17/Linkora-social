@@ -1,120 +1,105 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import React from 'react';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { Feed } from './Feed';
 import type { Post } from './PostCard';
+import { fetchIsPaused } from '../lib/api';
 
-// Mock the fetchIsPaused function
-const mockFetchIsPaused = jest.fn();
-jest.mock('../lib/api', () => ({
-  fetchIsPaused: mockFetchIsPaused,
-}));
+jest.mock('../lib/api');
 
-const mockPost: Post = {
-  id: '1',
-  author: 'test-author',
-  content: 'Test content',
-  likes: [],
-  tips: [],
-  created_at: '2024-01-01T00:00:00Z',
-};
+const mockFetchIsPaused = fetchIsPaused as jest.Mock;
 
-describe('Feed Component', () => {
+const POSTS: Post[] = [
+  { id: 1, author: 'GALICE', content: 'first post' },
+  { id: 2, author: 'GBOB', content: 'second post' },
+];
+
+function renderFeed(props: Partial<React.ComponentProps<typeof Feed>> = {}) {
+  return render(<Feed posts={POSTS} {...props} />);
+}
+
+describe('Feed', () => {
   beforeEach(() => {
+    mockFetchIsPaused.mockReset();
     mockFetchIsPaused.mockResolvedValue(false);
   });
 
-  afterEach(() => {
-    jest.clearAllMocks();
+  it('renders skeleton placeholders while loading', () => {
+    const { container } = renderFeed({ loading: true });
+    expect(container.querySelectorAll('[style*="200px"]')).toHaveLength(3);
   });
 
-  it('should render only one set of like/tip buttons per post', async () => {
-    const mockOnLike = jest.fn();
-    const mockOnTip = jest.fn();
-    
-    render(
-      <Feed
-        posts={[mockPost]}
-        onLike={mockOnLike}
-        onTip={mockOnTip}
-        likedPosts={new Set()}
-      />
-    );
-    
-    await waitFor(() => {
-      // Should only have one like button and one tip button per post
-      const likeButtons = screen.getAllByLabelText(/like post/i);
-      const tipButtons = screen.getAllByLabelText(/tip creator/i);
-      
-      expect(likeButtons).toHaveLength(1);
-      expect(tipButtons).toHaveLength(1);
-    });
+  it('renders an empty state when there are no posts', async () => {
+    render(<Feed posts={[]} />);
+    expect(await screen.findByText('No posts yet')).toBeInTheDocument();
   });
 
-  it('should properly wire callbacks with correct arguments', async () => {
-    const mockOnLike = jest.fn();
-    const mockOnTip = jest.fn();
-    
-    render(
-      <Feed
-        posts={[mockPost]}
-        onLike={mockOnLike}
-        onTip={mockOnTip}
-        likedPosts={new Set()}
-      />
-    );
-    
-    await waitFor(() => {
-      const likeButton = screen.getByLabelText(/like post/i);
-      const tipButton = screen.getByLabelText(/tip creator/i);
-      
-      // Click like button
-      fireEvent.click(likeButton);
-      expect(mockOnLike).toHaveBeenCalledWith(1); // post id as number
-      
-      // Click tip button
-      fireEvent.click(tipButton);
-      expect(mockOnTip).toHaveBeenCalledWith(1); // post id as number
-    });
+  it('renders a PostCard for every post', () => {
+    renderFeed();
+    expect(screen.getByText('first post')).toBeInTheDocument();
+    expect(screen.getByText('second post')).toBeInTheDocument();
   });
 
-  it('should disable buttons when contract is paused', async () => {
+  it('shows the paused banner once the indexer reports the contract is paused', async () => {
     mockFetchIsPaused.mockResolvedValue(true);
-    const mockOnLike = jest.fn();
-    const mockOnTip = jest.fn();
-    
-    render(
-      <Feed
-        posts={[mockPost]}
-        onLike={mockOnLike}
-        onTip={mockOnTip}
-        likedPosts={new Set()}
-      />
-    );
-    
+    renderFeed();
+
     await waitFor(() => {
-      const likeButton = screen.getByLabelText(/like post/i);
-      const tipButton = screen.getByLabelText(/tip creator/i);
-      
-      expect(likeButton).toBeDisabled();
-      expect(tipButton).toBeDisabled();
+      expect(screen.getByRole('alert')).toHaveTextContent(/temporarily paused/i);
     });
   });
 
-  it('should show pause banner when contract is paused', async () => {
+  it('disables writes and refuses to call handlers while paused', async () => {
     mockFetchIsPaused.mockResolvedValue(true);
-    
-    render(
-      <Feed
-        posts={[mockPost]}
-        onLike={jest.fn()}
-        onTip={jest.fn()}
-        likedPosts={new Set()}
-      />
-    );
-    
+    const onLike = jest.fn();
+    renderFeed({ onLike });
+
+    const likeButton = await screen.findByRole('button', { name: /like/i });
+    expect(likeButton).toBeDisabled();
+
+    await userEvent.click(likeButton);
+    expect(onLike).not.toHaveBeenCalled();
+  });
+
+  it('runs the handler through the pause guard when not paused', async () => {
+    const onLike = jest.fn();
+    renderFeed({ onLike });
+
+    await userEvent.click(await screen.findByRole('button', { name: /like/i }));
+
     await waitFor(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent(
-        'Linkora is temporarily paused. Writes are disabled until the protocol resumes.'
-      );
+      expect(onLike).toHaveBeenCalledWith(1);
     });
+  });
+
+  it('marks the post as pending while a guarded write is in flight, then settles', async () => {
+    let releaseGuard: (value: boolean) => void = () => {};
+    mockFetchIsPaused.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          releaseGuard = resolve;
+        })
+    );
+
+    const onLike = jest.fn();
+    renderFeed({ onLike });
+
+    const likeButton = await screen.findByRole('button', { name: /like/i });
+    void userEvent.click(likeButton);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /liking/i })).toBeDisabled();
+    });
+
+    releaseGuard(false);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^like$/i })).not.toBeDisabled();
+    });
+  });
+
+  it('reflects already-liked posts in the button label', () => {
+    renderFeed({ onLike: jest.fn(), likedPosts: new Set([1]) });
+    expect(screen.getByRole('button', { name: 'Liked' })).toBeInTheDocument();
   });
 });

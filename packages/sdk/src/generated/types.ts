@@ -76,6 +76,14 @@ export interface Post {
   tip_total: bigint;
 }
 
+export interface CommittedPost {
+  author: string;
+  content_hash: Uint8Array;
+  post_id: bigint;
+  reveal_time: bigint;
+  timestamp: bigint;
+}
+
 export interface Profile {
   address: string;
   creator_token: string;

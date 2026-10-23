@@ -240,6 +240,54 @@ export class GeneratedLinkoraClient {
   }
 
   /**
+   * Contract entrypoint: `get_committed_post`.
+   * SDK method: `getCommittedPost`.
+   */
+  async getCommittedPost(post_id: bigint): Promise<import("./types.js").CommittedPost | null> {
+    const retval = await this.simulateCall("get_committed_post", scvU64(post_id));
+    if (!retval) return null;
+    try {
+      const raw = scValToNative(retval);
+      return raw == null ? null : (raw as import("./types.js").CommittedPost);
+    } catch (e) {
+      if (e instanceof NotFoundError) return null;
+      throw e;
+    }
+  }
+
+  /**
+   * Contract entrypoint: `commit_post`.
+   * SDK method: `commitPost`.
+   */
+  async commitPost(
+    author: string,
+    content_hash: Uint8Array,
+    reveal_time: bigint
+  ): Promise<bigint> {
+    const retval = await this.simulateCall(
+      "commit_post",
+      scvAddress(author),
+      nativeToScVal(content_hash),
+      scvU64(reveal_time)
+    );
+    if (!retval) return 0n;
+    return scValToNative(retval) as bigint;
+  }
+
+  /**
+   * Contract entrypoint: `reveal_post`.
+   * SDK method: `revealPost`.
+   */
+  async revealPost(author: string, post_id: bigint, content: string): Promise<void> {
+    await this.simulateCall(
+      "reveal_post",
+      scvAddress(author),
+      scvU64(post_id),
+      scvString(content)
+    );
+  }
+
+  /**
    * Contract entrypoint: `get_followers`.
    * SDK method: `getFollowers`.
    */
@@ -539,7 +587,7 @@ export class GeneratedLinkoraClient {
       scvAddress(proposer),
       nativeToScVal(parameter),
       scvU64(new_value),
-      nativeToScVal(new_address)
+      new_address === null ? nativeToScVal(null) : scvAddress(new_address)
     );
   }
 
@@ -590,13 +638,22 @@ export class GeneratedLinkoraClient {
    * Contract entrypoint: `pool_withdraw`.
    * SDK method: `poolWithdraw`.
    */
-  poolWithdraw(signers: string[], pool_id: string, amount: bigint, recipient: string): string {
+  poolWithdraw(
+    signers: string[],
+    pool_id: string,
+    amount: bigint,
+    recipient: string,
+    min_out_amount: bigint | null,
+    deadline: bigint | null
+  ): string {
     return this.buildTx(
       "pool_withdraw",
       scvAddressVec(signers),
       scvSymbol(pool_id),
       scvI128(amount),
-      scvAddress(recipient)
+      scvAddress(recipient),
+      min_out_amount === null ? nativeToScVal(null) : scvI128(min_out_amount),
+      deadline === null ? nativeToScVal(null) : scvU64(deadline)
     );
   }
 

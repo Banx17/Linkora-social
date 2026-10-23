@@ -8,7 +8,9 @@
 
 import { getCachedPostById, getCachedPostsByIds, reconcilePosts } from "../db";
 import {
+  AUTHOR_POSTS_PAGE_SIZE,
   fetchAndCachePosts,
+  fetchAuthorPosts,
   fetchPostById,
   indexerPostTimestamp,
   ledgerToUnixSeconds,
@@ -228,7 +230,10 @@ describe("resolvePostWithFallback — deep-link cache miss (#1544)", () => {
     expect(post?.timestamp).toBe(ledgerToUnixSeconds(52_000_000));
     expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("/api/posts/77"));
     // Written back so the next open is served offline, without evicting the feed.
-    expect(mockedReconcilePosts).toHaveBeenCalledWith([expect.objectContaining({ id: "77" })], false);
+    expect(mockedReconcilePosts).toHaveBeenCalledWith(
+      [expect.objectContaining({ id: "77" })],
+      false
+    );
   });
 
   it("accepts a bare post object as well as a { post } envelope", async () => {
@@ -278,5 +283,78 @@ describe("resolvePostWithFallback — deep-link cache miss (#1544)", () => {
 
     expect(post?.content).toBe("deep linked body");
     expect(mockedGetCachedPostById).not.toHaveBeenCalled();
+  });
+});
+
+describe("fetchAuthorPosts — author-scoped indexer query (#1595)", () => {
+  it("queries only the author's posts, with explicit pagination", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: jest.fn().mockResolvedValue({
+        posts: [{ id: "1", author: "GAUTHOR9", content: "mine", created_ledger: 1000 }],
+      }),
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    mockedGetCachedPostsByIds.mockResolvedValue(new Map());
+
+    await fetchAuthorPosts("GAUTHOR9", 2, 4);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://indexer.example.com/api/posts?author=GAUTHOR9&limit=2&offset=4"
+    );
+  });
+
+  it("never evicts the main feed cache while listing one author", async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: jest.fn().mockResolvedValue({
+        posts: [{ id: "1", author: "GAUTHOR9", content: "mine", created_ledger: 1000 }],
+      }),
+    }) as unknown as typeof fetch;
+    mockedGetCachedPostsByIds.mockResolvedValue(new Map());
+
+    const posts = await fetchAuthorPosts("GAUTHOR9");
+
+    expect(posts).toHaveLength(1);
+    // evictStale must be false: an author page must not wipe the feed window.
+    expect(mockedReconcilePosts).toHaveBeenCalledTimes(1);
+    expect(mockedReconcilePosts.mock.calls[0][1]).toBe(false);
+  });
+
+  it("URL-encodes the author address", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: jest.fn().mockResolvedValue({ posts: [] }),
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    mockedGetCachedPostsByIds.mockResolvedValue(new Map());
+
+    await fetchAuthorPosts("G/WEIRD+ADDRESS", AUTHOR_POSTS_PAGE_SIZE, 0);
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      `https://indexer.example.com/api/posts?author=${encodeURIComponent(
+        "G/WEIRD+ADDRESS"
+      )}&limit=${AUTHOR_POSTS_PAGE_SIZE}&offset=0`
+    );
+  });
+
+  it("does not hit the network without an author", async () => {
+    const fetchMock = jest.fn();
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(fetchAuthorPosts("")).resolves.toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("throws on a transport failure so the screen can show an error state", async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: jest.fn().mockResolvedValue({}),
+    }) as unknown as typeof fetch;
+
+    await expect(fetchAuthorPosts("GAUTHOR9")).rejects.toThrow(/author posts/i);
+    expect(mockedReconcilePosts).not.toHaveBeenCalled();
   });
 });

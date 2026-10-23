@@ -61,7 +61,7 @@ export async function deriveWrappingKey(stellarAddress: string): Promise<CryptoK
     encoder.encode(APP_KEY),
     "PBKDF2",
     false,
-    ["deriveKey"],
+    ["deriveKey"]
   );
   return crypto.subtle.deriveKey(
     {
@@ -73,7 +73,7 @@ export async function deriveWrappingKey(stellarAddress: string): Promise<CryptoK
     passwordKey,
     { name: "AES-GCM", length: 256 },
     false,
-    ["encrypt", "decrypt"],
+    ["encrypt", "decrypt"]
   );
 }
 
@@ -81,16 +81,12 @@ export async function deriveWrappingKey(stellarAddress: string): Promise<CryptoK
  * Encrypt plaintext bytes with AES-GCM. Returns base64-encoded
  * IV ‖ ciphertext.
  */
-export async function encryptAesGcm(
-  key: CryptoKey,
-  plaintext: Uint8Array,
-): Promise<string> {
+export async function encryptAesGcm(key: CryptoKey, plaintext: Uint8Array): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
-    key,
-    plaintext,
-  );
+  // Narrowing copy: ensures the buffer is a plain ArrayBuffer (not SharedArrayBuffer),
+  // satisfying the BufferSource constraint introduced by the TS 5.7 Uint8Array generic.
+  const plaintextBuf: Uint8Array<ArrayBuffer> = new Uint8Array(plaintext);
+  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintextBuf);
   // Pack IV + ciphertext into a single base64 blob
   const combined = new Uint8Array(iv.length + new Uint8Array(ciphertext).length);
   combined.set(iv, 0);
@@ -101,17 +97,10 @@ export async function encryptAesGcm(
 /**
  * Decrypt a base64-encoded IV ‖ ciphertext blob with AES-GCM.
  */
-export async function decryptAesGcm(
-  key: CryptoKey,
-  encryptedB64: string,
-): Promise<Uint8Array> {
+export async function decryptAesGcm(key: CryptoKey, encryptedB64: string): Promise<Uint8Array> {
   const combined = base64ToBytes(encryptedB64);
   const iv = combined.slice(0, 12);
   const ciphertext = combined.slice(12);
-  const plaintext = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv },
-    key,
-    ciphertext,
-  );
+  const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
   return new Uint8Array(plaintext);
 }

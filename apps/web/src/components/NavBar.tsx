@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useWallet } from "@/hooks/useWallet";
+import { ConnectError } from "@/components/WalletProvider";
 import SearchBar from "@/components/SearchBar";
 import { BottomNav } from "@/components/mobile/BottomNav";
 import { useNotificationsContext } from "@/contexts/NotificationsContext";
@@ -17,6 +18,8 @@ import {
 } from "@/components/ThemeBootstrap";
 
 import { Logo } from "@/components/branding/Logo";
+import { NotificationBell } from "@/components/NotificationBell";
+import { useFeatureFlag } from "@/lib/featureFlags";
 
 /** Truncates a Stellar address to G…XXXX format */
 function truncateAddress(address: string): string {
@@ -25,26 +28,43 @@ function truncateAddress(address: string): string {
 
 export function NavBar() {
   const router = useRouter();
-  const { address, connected, network, connect, disconnect } = useWallet();
-  const { unreadCount } = useNotificationsContext();
-  const { registerComposeHandler, unregisterComposeHandler, registerSearchRef } =
-    useKeyboardShortcutsContext();
+  const { address, connected, network, connect, disconnect, isConnecting } = useWallet();
+  const {
+    registerComposeHandler,
+    unregisterComposeHandler,
+    registerWalletHandler,
+    unregisterWalletHandler,
+    registerSearchRef,
+    openHelpModal,
+    openCommandPalette,
+  } = useKeyboardShortcutsContext();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isWalletModalOpen, setIsWalletModalOpen] = useState(false);
   const [showFreighterBanner, setShowFreighterBanner] = useState(false);
   const [theme, setTheme] = useState<ThemePreference>("light");
 
+  const darkModeEnabled = useFeatureFlag("dark-mode-toggle");
+  const commandPaletteEnabled = useFeatureFlag("command-palette");
+
   // Ref forwarded to SearchBar so the '/' shortcut can focus the input
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Register/unregister compose handler for the 'n' shortcut
+  // Register/unregister handlers for shortcuts and command palette
   useEffect(() => {
     registerComposeHandler(() => setIsModalOpen(true));
+    registerWalletHandler(() => setIsWalletModalOpen(true));
     registerSearchRef(searchInputRef as React.RefObject<HTMLInputElement | null>);
     return () => {
       unregisterComposeHandler();
+      unregisterWalletHandler();
     };
-  }, [registerComposeHandler, unregisterComposeHandler, registerSearchRef]);
+  }, [
+    registerComposeHandler,
+    unregisterComposeHandler,
+    registerWalletHandler,
+    unregisterWalletHandler,
+    registerSearchRef,
+  ]);
 
   // Initialize theme from storage
   useEffect(() => {
@@ -60,7 +80,13 @@ export function NavBar() {
   const handleConnect = useCallback(async () => {
     try {
       await connect();
-    } catch {
+    } catch (err) {
+      // ConnectError gives us a typed reason so we can show the right message.
+      if (err instanceof ConnectError && err.reason === "declined") {
+        // User dismissed the Freighter prompt — don't show the install banner.
+        return;
+      }
+      // "not-installed", "no-address", or any unexpected error → show banner.
       setShowFreighterBanner(true);
     }
   }, [connect]);
@@ -121,46 +147,48 @@ export function NavBar() {
         <div className="flex items-center gap-2 sm:gap-3">
           {connected && (
             <div className="hidden md:flex items-center gap-3">
-              <button
-                onClick={toggleTheme}
-                className="rounded-lg p-1.5 text-[var(--text-muted)] hover:text-violet-400 transition-colors"
-                aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
-                title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
-              >
-                {theme === "light" ? (
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    strokeWidth={1.5}
-                    stroke="currentColor"
-                    className="h-5 w-5"
-                    aria-hidden="true"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M21.752 15.002A9.72 9.72 0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z"
-                    />
-                  </svg>
-                ) : (
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    strokeWidth={1.5}
-                    stroke="currentColor"
-                    className="h-5 w-5"
-                    aria-hidden="true"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M12 3v2.25m6.364.386-1.591 1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12 18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z"
-                    />
-                  </svg>
-                )}
-              </button>
+              {darkModeEnabled && (
+                <button
+                  onClick={toggleTheme}
+                  className="rounded-lg p-1.5 text-[var(--text-muted)] hover:text-violet-400 transition-colors"
+                  aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+                  title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+                >
+                  {theme === "light" ? (
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      strokeWidth={1.5}
+                      stroke="currentColor"
+                      className="h-5 w-5"
+                      aria-hidden="true"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M21.752 15.002A9.72 9.72 0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z"
+                      />
+                    </svg>
+                  ) : (
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      strokeWidth={1.5}
+                      stroke="currentColor"
+                      className="h-5 w-5"
+                      aria-hidden="true"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M12 3v2.25m6.364.386-1.591 1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12 18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z"
+                      />
+                    </svg>
+                  )}
+                </button>
+              )}
               <Link
                 href="/analytics"
                 className="rounded-lg p-1.5 text-[var(--text-muted)] hover:text-violet-400 transition-colors"
@@ -206,37 +234,57 @@ export function NavBar() {
                   />
                 </svg>
               </Link>
-              <Link
-                href="/notifications"
-                aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ""}`}
-                className="relative rounded-lg p-1.5 text-[var(--text-muted)] hover:text-violet-400 transition-colors"
-                data-testid="notifications-bell"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  strokeWidth={1.5}
-                  stroke="currentColor"
-                  className="h-5 w-5"
-                  aria-hidden="true"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0"
-                  />
-                </svg>
-                {unreadCount > 0 && (
-                  <span
-                    className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-violet-500 text-[10px] font-bold text-white"
-                    aria-hidden="true"
-                    data-testid="unread-badge"
+              {commandPaletteEnabled && (
+                <>
+                  <button
+                    onClick={openCommandPalette}
+                    className="hidden lg:flex items-center gap-1.5 px-2 py-1 text-xs text-[var(--text-muted)] border border-[var(--border)] rounded-lg hover:border-violet-500/50 hover:text-violet-400 transition-colors"
+                    aria-label="Open command palette (⌘K)"
+                    title="Command Palette (⌘K / Ctrl+K)"
+                    data-testid="command-palette-entry"
                   >
-                    {unreadCount > 99 ? "99+" : unreadCount}
-                  </span>
-                )}
-              </Link>
+                    <svg
+                      className="w-3.5 h-3.5"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      strokeWidth={2}
+                      stroke="currentColor"
+                      aria-hidden="true"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                      />
+                    </svg>
+                    <span className="font-medium">⌘K</span>
+                  </button>
+                  <button
+                    onClick={openHelpModal}
+                    className="rounded-lg p-1.5 text-[var(--text-muted)] hover:text-violet-400 transition-colors"
+                    aria-label="Keyboard shortcuts"
+                    title="Keyboard shortcuts (?)"
+                    data-testid="keyboard-shortcuts-entry"
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      strokeWidth={1.5}
+                      stroke="currentColor"
+                      className="h-5 w-5"
+                      aria-hidden="true"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 5.25h.008v.008H12v-.008Z"
+                      />
+                    </svg>
+                  </button>
+                </>
+              )}
+              <NotificationBell />
             </div>
           )}
           {connected && address ? (
@@ -271,11 +319,13 @@ export function NavBar() {
           ) : (
             <button
               onClick={handleConnect}
-              className="rounded-lg bg-violet-600 px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-semibold text-white hover:bg-violet-500 transition-colors"
-              aria-label="Connect Freighter wallet"
+              disabled={isConnecting}
+              className="rounded-lg bg-violet-600 px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-semibold text-white hover:bg-violet-500 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+              aria-label={isConnecting ? "Connecting wallet…" : "Connect Freighter wallet"}
+              aria-busy={isConnecting}
               data-testid="connect-wallet"
             >
-              Connect
+              {isConnecting ? "Connecting…" : "Connect"}
             </button>
           )}
         </div>

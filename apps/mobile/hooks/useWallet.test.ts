@@ -17,7 +17,6 @@ describe("useWallet", () => {
       connect: jest.fn(),
       disconnect: jest.fn(),
       refresh: jest.fn(),
-      setNetwork: jest.fn(),
     };
 
     (useWalletContext as jest.Mock).mockReturnValue(mockContext);
@@ -33,7 +32,6 @@ describe("useWallet", () => {
     expect(typeof result.current.connect).toBe("function");
     expect(typeof result.current.disconnect).toBe("function");
     expect(typeof result.current.refresh).toBe("function");
-    expect(typeof result.current.setNetwork).toBe("function");
   });
 
   it("returns wallet state correctly when disconnected", () => {
@@ -46,7 +44,6 @@ describe("useWallet", () => {
       connect: jest.fn(),
       disconnect: jest.fn(),
       refresh: jest.fn(),
-      setNetwork: jest.fn(),
     };
 
     (useWalletContext as jest.Mock).mockReturnValue(mockContext);

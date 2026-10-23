@@ -1,162 +1,85 @@
+/**
+ * Page-shell coverage for the feed (issues #1580 / #1724).
+ *
+ * `FeedStream` suspends through React 19's `use()`, which the Jest/jsdom
+ * renderer used by this repo cannot resolve, so it is replaced with a stub
+ * here. The data and pagination behaviour is covered by `FeedList.test.tsx`
+ * (unit) and `tests/e2e/feed-infinite-scroll.spec.ts` (browser, real `use()`).
+ */
+
 import React from "react";
-import { act, render } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
+
 import FeedPage from "./page";
 
-const mockUseWallet = jest.fn();
-const mockUseFeedPersistence = jest.fn();
-const mockUseMobileDetect = jest.fn();
+// ---------------------------------------------------------------------------
+// Mocks
+// ---------------------------------------------------------------------------
 
-jest.mock("next/link", () => ({
-  __esModule: true,
-  default: ({ children, href, ...props }: { children: React.ReactNode; href: string }) => (
-    <a href={href} {...props}>
-      {children}
-    </a>
-  ),
+jest.mock("next/navigation", () => ({
+  useRouter: () => ({ push: jest.fn(), replace: jest.fn(), prefetch: jest.fn() }),
+  usePathname: () => "/feed",
+  useSearchParams: () => new URLSearchParams(),
 }));
 
+const mockUseWallet = jest.fn();
 jest.mock("@/hooks/useWallet", () => ({
   useWallet: () => mockUseWallet(),
 }));
 
-jest.mock("@/hooks/useFeedPersistence", () => ({
-  useFeedPersistence: () => mockUseFeedPersistence(),
-}));
-
-jest.mock("@/hooks/useMobileDetect", () => ({
-  useMobileDetect: () => mockUseMobileDetect(),
-}));
-
-jest.mock("@/components/AppSidebar", () => ({
-  AppSidebar: () => <div>AppSidebar</div>,
-}));
-
-jest.mock("@/components/onboarding/OnboardingGuard", () => ({
-  OnboardingGuard: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-}));
-
-jest.mock("@/components/AnimatedList", () => ({
-  AnimatedList: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-}));
-
-jest.mock("@/components/PostCard", () => ({
-  PostCard: ({ post }: { post: { id: string | number; content?: string } }) => (
-    <div>{post.content ?? `Post ${post.id}`}</div>
-  ),
-  PostCardSkeleton: () => <div>Loading post</div>,
-}));
-
-jest.mock("@/components/cards/MasonryCard", () => ({
-  MasonryCard: ({ post }: { post: { id: string | number; content?: string } }) => (
-    <div>{post.content ?? `Masonry ${post.id}`}</div>
+jest.mock("./FeedStream", () => ({
+  FeedStream: (props: { tab: string; address: string | null }) => (
+    <div data-testid="feed-stream" data-tab={props.tab} data-address={props.address ?? "none"} />
   ),
 }));
 
-jest.mock("@/components/mobile/MobileHeader", () => ({
-  MobileHeader: () => <div>MobileHeader</div>,
-}));
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
-jest.mock("@/components/mobile/MobileFeed", () => ({
-  MobileFeed: () => <div>MobileFeed</div>,
-}));
+describe("FeedPage (#1580)", () => {
+  it('renders the "For You" tab by default', () => {
+    mockUseWallet.mockReturnValue({ address: null });
 
-jest.mock("@/components/forms/FieldError", () => ({
-  FieldError: () => null,
-}));
+    render(<FeedPage />);
 
-jest.mock("@/lib/optimisticStore", () => ({
-  OptimisticStore: {
-    setLikeState: jest.fn(),
-    setTipState: jest.fn(),
-  },
-  useOptimisticLike: () => ({ isLiked: false, likeCount: 0 }),
-  useOptimisticTip: () => ({ tipTotal: 0 }),
-}));
-
-jest.mock("@/lib/tx", () => ({
-  buildSignAndSubmit: jest.fn(),
-}));
-
-jest.mock("../../../../../packages/sdk/src/client", () => ({
-  LinkoraClient: jest.fn(),
-}));
-
-describe("FeedPage websocket cleanup", () => {
-  beforeEach(() => {
-    jest.useFakeTimers();
-    mockUseWallet.mockReturnValue({
-      address: null,
-      connected: false,
-      connect: jest.fn(),
-    });
-    mockUseFeedPersistence.mockReturnValue({
-      isOffline: false,
-      servedFromCache: false,
-      setServedFromCache: jest.fn(),
-      restoreScroll: jest.fn(),
-      persistFeed: jest.fn(),
-      getCache: jest.fn(() => null),
-      clearCache: jest.fn(),
-    });
-    mockUseMobileDetect.mockReturnValue(false);
-
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ posts: [], has_more: false }),
-    }) as typeof fetch;
-
-    Object.defineProperty(window, "scrollY", { value: 0, writable: true });
-    window.scrollTo = jest.fn();
-    jest.spyOn(global, "setTimeout");
-    jest.spyOn(global, "clearTimeout");
+    expect(screen.getByTestId("tab-for-you")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("tab-following")).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByTestId("tabpanel-for-you")).toBeInTheDocument();
+    expect(screen.getByTestId("feed-stream")).toHaveAttribute("data-tab", "for-you");
   });
 
-  afterEach(() => {
-    jest.runOnlyPendingTimers();
-    jest.useRealTimers();
-    jest.restoreAllMocks();
-    delete (global as { WebSocket?: typeof WebSocket }).WebSocket;
+  it('switches to the "Following" tab and passes the connected wallet', () => {
+    const address = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    mockUseWallet.mockReturnValue({ address });
+
+    render(<FeedPage />);
+    fireEvent.click(screen.getByTestId("tab-following"));
+
+    expect(screen.getByTestId("tab-following")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("tabpanel-following")).toBeInTheDocument();
+
+    const stream = screen.getByTestId("feed-stream");
+    expect(stream).toHaveAttribute("data-tab", "following");
+    expect(stream).toHaveAttribute("data-address", address);
   });
 
-  it("cleans up the reconnect timer and socket when unmounted after disconnect", () => {
-    class MockWebSocket {
-      static instances: MockWebSocket[] = [];
+  it("renders the Following tab without a wallet address", () => {
+    mockUseWallet.mockReturnValue({ address: null });
 
-      public onopen: ((event?: Event) => void) | null = null;
-      public onmessage: ((event: MessageEvent) => void) | null = null;
-      public onerror: (() => void) | null = null;
-      public onclose: (() => void) | null = null;
-      public readyState = 1;
-      public send = jest.fn();
-      public close = jest.fn();
+    render(<FeedPage />);
+    fireEvent.click(screen.getByTestId("tab-following"));
 
-      constructor(public url: string) {
-        MockWebSocket.instances.push(this);
-      }
-    }
+    expect(screen.getByTestId("feed-stream")).toHaveAttribute("data-address", "none");
+  });
 
-    (global as typeof globalThis & { WebSocket: typeof MockWebSocket }).WebSocket =
-      MockWebSocket as any;
+  it("exposes a focusable feed container for the return-to-top FAB", () => {
+    mockUseWallet.mockReturnValue({ address: null });
 
-    const { unmount } = render(<FeedPage />);
-    const socket = MockWebSocket.instances[0];
-    expect(socket).toBeDefined();
+    render(<FeedPage />);
 
-    act(() => {
-      socket.onclose?.();
-    });
-
-    expect(setTimeout).toHaveBeenCalledTimes(1);
-
-    unmount();
-
-    expect(socket.close).toHaveBeenCalledTimes(1);
-
-    act(() => {
-      jest.runOnlyPendingTimers();
-    });
-
-    expect(MockWebSocket.instances).toHaveLength(1);
-    expect(clearTimeout).toHaveBeenCalledTimes(1);
+    const main = screen.getByRole("main");
+    expect(main).toHaveAttribute("id", "feed-top");
+    expect(main).toHaveAttribute("tabindex", "-1");
   });
 });

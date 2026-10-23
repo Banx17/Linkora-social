@@ -33,6 +33,11 @@ export interface PaginationOptions {
   pageSize?: number;
   /** Hard cap on the number of pages walked (safety guard, default 100). */
   maxPages?: number;
+  /**
+   * Opaque cursor token returned by a previous page. When provided, iteration
+   * resumes from the position encoded in the cursor rather than the start.
+   */
+  cursor?: string;
 }
 
 const CURSOR_VERSION = 1;
@@ -48,11 +53,7 @@ export function decodeCursor(cursor: string): number {
   try {
     payload = decodeJson(cursor);
   } catch {
-    throw new LinkoraError(
-      "Malformed pagination cursor.",
-      "INVALID_CURSOR",
-      { cursor }
-    );
+    throw new LinkoraError("Malformed pagination cursor.", "INVALID_CURSOR", { cursor });
   }
 
   if (
@@ -63,11 +64,7 @@ export function decodeCursor(cursor: string): number {
     !Number.isInteger((payload as { offset: number }).offset) ||
     (payload as { offset: number }).offset < 0
   ) {
-    throw new LinkoraError(
-      "Malformed pagination cursor.",
-      "INVALID_CURSOR",
-      { cursor }
-    );
+    throw new LinkoraError("Malformed pagination cursor.", "INVALID_CURSOR", { cursor });
   }
 
   return (payload as { offset: number }).offset;
@@ -153,7 +150,11 @@ export async function* paginateList<T>(
   let pages = 0;
 
   while (true) {
-    const page = await fetchPageWithCursor<T>({ cursor, pageSize: opts.pageSize, fetchPage: opts.fetchPage });
+    const page = await fetchPageWithCursor<T>({
+      cursor,
+      pageSize: opts.pageSize,
+      fetchPage: opts.fetchPage,
+    });
     for (const item of page.items) {
       yield item;
     }

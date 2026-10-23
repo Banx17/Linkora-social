@@ -1,5 +1,7 @@
 import express, { Request, Response, NextFunction } from "express";
+import { randomBytes } from "crypto";
 import helmet from "helmet";
+import path from "path";
 import { Pool as PgPool } from "pg";
 import { Database } from "../db";
 import { logger, requestLoggingMiddleware } from "../logger";
@@ -14,6 +16,7 @@ import { createFollowsRouter } from "./routes/follows";
 import { createPoolsRouter } from "./routes/pools";
 import { createStateRootRouter } from "./routes/stateRoot";
 import { createNotificationsRouter } from "./routes/notifications";
+import { createNotificationInboxRouter } from "./routes/notificationInbox";
 import { createGovernanceRouter } from "./routes/governance";
 import { createUsersRouter } from "./routes/users";
 import { createFeedRouter } from "./routes/feed";
@@ -170,6 +173,47 @@ export function createApp(
     }
   });
 
+  if (process.env.NODE_ENV !== "production" && process.env.NODE_ENV !== "test") {
+    const openApiPath = path.resolve(__dirname, "../../../../docs/api/indexer.openapi.yaml");
+
+    app.get("/api/openapi.yaml", (_req: Request, res: Response, next: NextFunction): void => {
+      res.type("application/yaml").sendFile(openApiPath, (error) => {
+        if (error) next(error);
+      });
+    });
+
+    app.get("/api/docs", (_req: Request, res: Response): void => {
+      const nonce = randomBytes(16).toString("base64");
+      res.setHeader(
+        "Content-Security-Policy",
+        [
+          "default-src 'self'",
+          `script-src 'self' https://unpkg.com 'nonce-${nonce}'`,
+          "style-src 'self' https://unpkg.com 'unsafe-inline'",
+          "img-src 'self' data: https://unpkg.com",
+          "font-src 'self' data: https://unpkg.com",
+          "connect-src 'self'",
+        ].join("; ")
+      );
+      res.type("html").send(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Linkora Indexer API</title>
+    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+  </head>
+  <body>
+    <div id="swagger-ui"></div>
+    <script nonce="${nonce}" src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+    <script nonce="${nonce}">
+      window.onload = () => SwaggerUIBundle({ url: "/api/openapi.yaml", dom_id: "#swagger-ui" });
+    </script>
+  </body>
+</html>`);
+    });
+  }
+
   // ── Auth + rate limiting ──────────────────────────────────────────────────
   //
   // Issue #1325: the rate-limit middleware selects the per-address bucket only
@@ -199,7 +243,7 @@ export function createApp(
     next();
   });
 
-  // Every route mounted here must be documented in `openapi.yaml`.
+  // Every route mounted here must be documented in the OpenAPI contract.
   // `src/api/__tests__/openapi.test.ts` walks this router stack and fails CI
   // when a mounted route is undocumented or a documented route is stale, so a
   // new endpoint cannot ship without a contract.
@@ -215,6 +259,10 @@ export function createApp(
   const notificationService = pg
     ? new NotificationService({ deviceTokenStore: new PostgresDeviceTokenStore(pg) })
     : defaultNotificationService;
+  if (pg) {
+    // Mounted before the device/preferences router so `/inbox/*` is matched here.
+    app.use("/api/notifications/inbox", createNotificationInboxRouter(pg));
+  }
   app.use("/api/notifications", createNotificationsRouter(notificationService));
 
   if (pg) {
@@ -307,7 +355,7 @@ if (require.main === module) {
     : createApp(_stub);
 
   apiApp.listen(PORT, () => {
-    console.log(`Indexer API listening on port ${PORT}`);
-    console.log(`Rate limit enabled: read limit is 60 RPM, write limit is 10 RPM`);
+    logger.info({ port: PORT }, "Indexer API listening");
+    logger.info("Rate limit enabled: read limit is 60 RPM, write limit is 10 RPM");
   });
 }
