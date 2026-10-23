@@ -50,6 +50,8 @@ tags:
     description: Tip pool details and analytics.
   - name: Governance
     description: Indexed governance proposals.
+  - name: Events
+    description: Raw on-chain contract events with cursor pagination.
   - name: Users
     description: User block lists and published direct-message keys.
   - name: Notifications
@@ -414,6 +416,10 @@ paths:
           schema:
             type: integer
             default: 0
+          description: >-
+            Offset-based fallback for the home feed (legacy). The explore and
+            following feeds use cursor pagination; the home feed will migrate
+            in a follow-up once the social graph query is refactored.
       responses:
         "200":
           description: Paginated feed.
@@ -689,6 +695,47 @@ paths:
                     type: boolean
         "400":
           $ref: "#/components/responses/ValidationError"
+
+  # ── Events ──────────────────────────────────────────────────────────────────
+  /api/events:
+    get:
+      summary: List on-chain events
+      operationId: listEvents
+      tags: [Events]
+      security:
+        - StellarSig: []
+        - {}
+      description: >-
+        Returns a cursor-paginated list of raw on-chain events from `raw_events`,
+        sorted newest-first by `(ledger_sequence DESC, event_index DESC)`.
+        The composite keyset cursor guarantees no skipped or duplicated rows
+        when new events are ingested between page requests.
+      parameters:
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/cursor"
+        - name: contract_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter events to a single contract address.
+        - name: topic
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter by first topic value (exact match against `topic[1]`).
+      responses:
+        "200":
+          description: Cursor-paginated list of on-chain events.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventList"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   # ── Users ───────────────────────────────────────────────────────────────────
   /api/users/{address}/blocked:
@@ -1292,6 +1339,55 @@ components:
           type: integer
         updated_ledger:
           type: integer
+
+    ChainEvent:
+      type: object
+      required: [id, ledger_sequence, event_index, contract_id, topic, data]
+      properties:
+        id:
+          type: string
+          description: Surrogate row ID serialised as a string (supports large integers).
+        ledger_sequence:
+          type: integer
+          description: Stellar ledger sequence in which this event was emitted.
+        event_index:
+          type: integer
+          description: Position of this event within the ledger batch.
+        contract_id:
+          type: string
+          description: Soroban contract that emitted the event.
+        topic:
+          type: array
+          items:
+            type: string
+          description: Decoded topic values from the contract event.
+        data:
+          type: object
+          additionalProperties: true
+          description: Decoded JSONB event payload.
+        processed_at:
+          type: [string, "null"]
+          format: date-time
+          description: Timestamp when the event was projected into domain tables. `null` if not yet processed.
+
+    EventList:
+      type: object
+      required: [events, limit, cursor, next_cursor, has_more]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChainEvent"
+        limit:
+          type: integer
+        cursor:
+          type: [string, "null"]
+          description: The cursor token that was used to fetch this page.
+        next_cursor:
+          type: [string, "null"]
+          description: Pass as `cursor` to fetch the next page. `null` when no more pages exist.
+        has_more:
+          type: boolean
 
     ErrorBody:
       type: object

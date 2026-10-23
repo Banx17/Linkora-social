@@ -1207,4 +1207,99 @@ export class PostgresDatabase implements Database {
     );
     return res.rows[0]?.x25519_pubkey ?? null;
   }
+
+  // ─────────────────────────── Chain Events (raw_events) ──────────────────────
+
+  /**
+   * Cursor-based on-chain event list sorted by (ledger_sequence DESC, event_index DESC).
+   *
+   * The opaque cursor is `base64("ledgerSequence|eventIndex")`. Both fields
+   * are numeric. The composite keyset avoids skipping or duplicating events
+   * that share the same ledger when new events are ingested between pages.
+   *
+   * Optional filters:
+   *  - `contract_id` — restricts results to a single contract.
+   *  - `topic` — restricts results to events whose first topic matches the
+   *    value (case-sensitive exact match against `topic[1]`).
+   */
+  async listEventsCursor(filters: {
+    limit: number;
+    cursor?: string;
+    contract_id?: string;
+    topic?: string;
+  }): Promise<{ events: import("./db").ChainEvent[]; nextCursor: string | null }> {
+    const { limit, cursor, contract_id, topic } = filters;
+
+    const params: unknown[] = [];
+    const conditions: string[] = [];
+
+    if (cursor !== undefined) {
+      let decoded: string;
+      try {
+        decoded = Buffer.from(cursor, "base64").toString("utf-8");
+      } catch {
+        decoded = "";
+      }
+      const sep = decoded.lastIndexOf("|");
+      if (sep > 0 && sep < decoded.length - 1) {
+        const ledgerValue = decoded.slice(0, sep);
+        const indexValue = decoded.slice(sep + 1);
+        if (/^\d+$/.test(ledgerValue) && /^\d+$/.test(indexValue)) {
+          params.push(ledgerValue, indexValue);
+          // Composite keyset: strictly ordered even when ledger_sequence ties.
+          conditions.push(`(ledger_sequence, event_index) < ($${params.length - 1}::bigint, $${params.length}::int)`);
+        }
+      }
+    }
+
+    if (contract_id !== undefined) {
+      params.push(contract_id);
+      conditions.push(`contract_id = $${params.length}`);
+    }
+
+    if (topic !== undefined) {
+      params.push(topic);
+      conditions.push(`topic[1] = $${params.length}`);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+    params.push(limit + 1);
+    const limitParam = `$${params.length}`;
+
+    const res = await this.pool.query(
+      `
+      SELECT id, ledger_sequence, event_index, contract_id, topic, data, processed_at
+      FROM raw_events
+      ${whereClause}
+      ORDER BY ledger_sequence DESC, event_index DESC
+      LIMIT ${limitParam}
+      `,
+      params
+    );
+
+    const hasMore = res.rows.length > limit;
+    const rows = hasMore ? res.rows.slice(0, limit) : res.rows;
+
+    const events: import("./db").ChainEvent[] = rows.map((row) => ({
+      id: BigInt(row.id),
+      ledger_sequence: Number(row.ledger_sequence),
+      event_index: Number(row.event_index),
+      contract_id: row.contract_id,
+      topic: row.topic ?? [],
+      data: row.data ?? {},
+      processed_at: row.processed_at ?? null,
+    }));
+
+    let nextCursor: string | null = null;
+    if (hasMore && rows.length > 0) {
+      const last = rows[rows.length - 1];
+      nextCursor = Buffer.from(
+        `${last.ledger_sequence}|${last.event_index}`,
+        "utf-8"
+      ).toString("base64");
+    }
+
+    return { events, nextCursor };
+  }
 }

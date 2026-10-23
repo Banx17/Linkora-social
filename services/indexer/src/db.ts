@@ -105,6 +105,21 @@ export interface GovernanceVote {
   ledger: number;
 }
 
+/**
+ * A single on-chain event as stored in `raw_events`, exposed via the public
+ * `/api/events` endpoint.  `data` is the decoded JSONB payload from the
+ * contract event.
+ */
+export interface ChainEvent {
+  id: bigint;
+  ledger_sequence: number;
+  event_index: number;
+  contract_id: string;
+  topic: string[];
+  data: Record<string, unknown>;
+  processed_at: Date | null;
+}
+
 export interface Database {
   // Profiles
   upsertProfile(profile: Profile): Promise<void>;
@@ -211,6 +226,18 @@ export interface Database {
     limit: number;
     cursor?: string;
   }): Promise<{ profiles: Profile[]; nextCursor: string | null }>;
+
+  /**
+   * Cursor-based on-chain events list sorted by (ledger_sequence DESC, event_index DESC).
+   * `cursor` encodes `"ledgerSequence|eventIndex"` — both numeric.
+   * Optionally filtered by `contract_id` and/or a `topic` prefix string.
+   */
+  listEventsCursor(filters: {
+    limit: number;
+    cursor?: string;
+    contract_id?: string;
+    topic?: string;
+  }): Promise<{ events: ChainEvent[]; nextCursor: string | null }>;
 
   getFeed?(filters: {
     viewer?: string;

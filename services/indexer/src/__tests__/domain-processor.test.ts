@@ -65,6 +65,7 @@ function makeDb(): jest.Mocked<Database> {
     listGovernanceProposals: jest.fn().mockResolvedValue({ proposals: [], total: 0 }),
     listGovernanceProposalsCursor: jest.fn().mockResolvedValue({ proposals: [], nextCursor: null }),
     listProfilesCursor: jest.fn().mockResolvedValue({ profiles: [], nextCursor: null }),
+    listEventsCursor: jest.fn().mockResolvedValue({ events: [], nextCursor: null }),
     insertBlock: jest.fn().mockResolvedValue(undefined),
     deleteBlock: jest.fn().mockResolvedValue(undefined),
     getBlockedUsers: jest.fn().mockResolvedValue({ blocked: [], total: 0 }),
