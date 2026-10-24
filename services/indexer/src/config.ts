@@ -62,6 +62,9 @@
  * ALLOW_IN_MEMORY_RATE_LIMIT  — Explicit opt-out allowing the in-memory store
  *                               in production. Only safe for single-replica
  *                               deployments.
+ * REDIS_CACHE_URL              — Redis endpoint for the API response cache
+ *                               (profiles, feed, pools). Defaults to REDIS_URL
+ *                               when not set. Omit both to run without caching.
  */
 
 import { resolveRateLimitEnv } from "@linkora/types/src/rate-limit-env";
@@ -107,6 +110,14 @@ export interface IndexerConfig {
    * service is allowed to run with per-instance in-memory counters.
    */
   redisUrl: string | undefined;
+
+  /**
+   * Redis endpoint for the API response cache (profiles, feed, pools).
+   * When undefined the cache is silently disabled and every request hits
+   * PostgreSQL directly.  Separate from `redisUrl` so the cache can be
+   * pointed at a different Redis instance or disabled independently.
+   */
+  redisCacheUrl: string | undefined;
 
   // Streaming / rate limiting
   rpcRateLimitPerSec: number | undefined;
@@ -224,6 +235,7 @@ export function loadConfig(): IndexerConfig {
     scoreRefreshIntervalMinutes: optionalInt("SCORE_REFRESH_INTERVAL_MINUTES", 5),
 
     redisUrl: rateLimitEnv.redisUrl,
+    redisCacheUrl: process.env.REDIS_CACHE_URL ?? rateLimitEnv.redisUrl,
 
     rpcRateLimitPerSec: process.env.RPC_RATE_LIMIT_PER_SEC
       ? parseInt(process.env.RPC_RATE_LIMIT_PER_SEC, 10)
