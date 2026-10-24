@@ -21,6 +21,7 @@ import { createGovernanceRouter } from "./routes/governance";
 import { createUsersRouter } from "./routes/users";
 import { createFeedRouter } from "./routes/feed";
 import { createSearchRouter } from "./routes/search";
+import { createWebhooksRouter } from "./routes/webhooks";
 import { createEventsRouter } from "./routes/events";
 import { MediaUploadConfig } from "../config";
 import { isFenced } from "../gossip";
@@ -253,6 +254,10 @@ export function createApp(
   app.use("/api/profiles", createProfilesRouter(db, cache));
   app.use("/api/posts", createPostsRouter(db, mediaUpload));
   app.use("/api/search", createSearchRouter(db));
+  app.use("/api/webhooks", createWebhooksRouter(db, pg || (db as any).pool));
+  if (pg) {
+    app.use("/api/events", createEventsRouter(pg));
+  }
   app.use("/api/follows", createFollowsRouter(db));
   app.use("/api/pools", createPoolsRouter(db, cache));
   app.use("/api/governance", createGovernanceRouter(db));

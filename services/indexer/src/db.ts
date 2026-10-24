@@ -191,6 +191,17 @@ export interface Database {
     limit: number;
     offset: number;
   }): Promise<{ posts: Post[]; total: number }>;
+  search(filters: {
+    q: string;
+    type?: "posts" | "profiles" | "pools" | "all";
+    limit: number;
+    offset: number;
+  }): Promise<{
+    posts?: Post[];
+    profiles?: Profile[];
+    pools?: Pool[];
+    total: number;
+  }>;
   /**
    * Cursor-based post list. `cursor` is the opaque base64 token from the
    * previous response's `next_cursor` field (encodes `"isoTimestamp|id"`).
