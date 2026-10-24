@@ -1,5 +1,6 @@
 import { createGovernanceRouter } from "../governance";
 import { Database } from "../../../db";
+import { encodeCursor } from "../cursor";
 
 function createMockResponse() {
   const res = {
@@ -37,34 +38,37 @@ async function getProposals(query: Record<string, unknown>, db: Database) {
   return invokeRoute(router, "/proposals", { query });
 }
 
+const MOCK_PROPOSAL = {
+  proposal_id: 1n,
+  proposer: "GPROPOSER123",
+  parameter: "FeeBps",
+  new_value: 500n,
+  votes_for: 100n,
+  votes_against: 50n,
+  status: "Active",
+  created_ledger: 100,
+  updated_ledger: 100,
+};
+
 describe("governance API", () => {
   let db: jest.Mocked<Database>;
 
   beforeEach(() => {
     db = {
-      listGovernanceProposals: jest.fn().mockResolvedValue({
-        proposals: [
-          {
-            proposal_id: 1n,
-            proposer: "GPROPOSER123",
-            parameter: "FeeBps",
-            new_value: 500n,
-            votes_for: 100n,
-            votes_against: 50n,
-            status: "Active",
-            created_ledger: 100,
-            updated_ledger: 100,
-          },
-        ],
-        total: 1,
+      listGovernanceProposalsCursor: jest.fn().mockResolvedValue({
+        proposals: [MOCK_PROPOSAL],
+        nextCursor: null,
       }),
     } as unknown as jest.Mocked<Database>;
   });
 
-  it("lists proposals with default limit and offset", async () => {
+  it("lists proposals with default limit (no cursor)", async () => {
     const res = await getProposals({}, db);
 
-    expect(db.listGovernanceProposals).toHaveBeenCalledWith({ limit: 20, offset: 0 });
+    expect(db.listGovernanceProposalsCursor).toHaveBeenCalledWith({
+      limit: 20,
+      cursor: undefined,
+    });
     expect(res.json).toHaveBeenCalledWith({
       proposals: [
         {
@@ -79,30 +83,74 @@ describe("governance API", () => {
           updated_ledger: 100,
         },
       ],
-      total: 1,
       limit: 20,
-      offset: 0,
+      cursor: null,
+      next_cursor: null,
       has_more: false,
     });
   });
 
-  it("lists proposals with custom limit and offset", async () => {
-    const res = await getProposals({ limit: "5", offset: "10" }, db);
+  it("forwards cursor to the database method", async () => {
+    const cursor = encodeCursor("1", "1");
+    db.listGovernanceProposalsCursor = jest.fn().mockResolvedValue({
+      proposals: [],
+      nextCursor: null,
+    });
 
-    expect(db.listGovernanceProposals).toHaveBeenCalledWith({ limit: 5, offset: 10 });
+    const res = await getProposals({ cursor }, db);
+
+    expect(db.listGovernanceProposalsCursor).toHaveBeenCalledWith({
+      limit: 20,
+      cursor,
+    });
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ cursor, next_cursor: null, has_more: false })
+    );
+  });
+
+  it("propagates next_cursor when more pages exist", async () => {
+    const nextCursor = encodeCursor("2", "2");
+    db.listGovernanceProposalsCursor = jest.fn().mockResolvedValue({
+      proposals: [MOCK_PROPOSAL],
+      nextCursor,
+    });
+
+    const res = await getProposals({ limit: "1" }, db);
+
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({
-        limit: 5,
-        offset: 10,
+        next_cursor: nextCursor,
+        has_more: true,
       })
     );
   });
 
-  it("rejects invalid limit or offset", async () => {
-    const res1 = await getProposals({ limit: "-1" }, db);
-    expect(res1.status).toHaveBeenCalledWith(400);
+  it("lists proposals with a custom limit", async () => {
+    const res = await getProposals({ limit: "5" }, db);
 
-    const res2 = await getProposals({ offset: "abc" }, db);
-    expect(res2.status).toHaveBeenCalledWith(400);
+    expect(db.listGovernanceProposalsCursor).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 5 })
+    );
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 5 })
+    );
+  });
+
+  it("rejects invalid limit with 400", async () => {
+    const res = await getProposals({ limit: "-1" }, db);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(db.listGovernanceProposalsCursor).not.toHaveBeenCalled();
+  });
+
+  it("rejects an object-shaped cursor with 400", async () => {
+    const res = await getProposals({ cursor: { a: "b" } }, db);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(db.listGovernanceProposalsCursor).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-base64 cursor with 400", async () => {
+    const res = await getProposals({ cursor: "not valid!!!" }, db);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(db.listGovernanceProposalsCursor).not.toHaveBeenCalled();
   });
 });

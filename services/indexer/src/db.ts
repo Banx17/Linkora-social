@@ -105,6 +105,21 @@ export interface GovernanceVote {
   ledger: number;
 }
 
+/**
+ * A single on-chain event as stored in `raw_events`, exposed via the public
+ * `/api/events` endpoint.  `data` is the decoded JSONB payload from the
+ * contract event.
+ */
+export interface ChainEvent {
+  id: bigint;
+  ledger_sequence: number;
+  event_index: number;
+  contract_id: string;
+  topic: string[];
+  data: Record<string, unknown>;
+  processed_at: Date | null;
+}
+
 export interface Database {
   // Profiles
   upsertProfile(profile: Profile): Promise<void>;
@@ -176,11 +191,54 @@ export interface Database {
     limit: number;
     offset: number;
   }): Promise<{ posts: Post[]; total: number }>;
+  /**
+   * Cursor-based post list. `cursor` is the opaque base64 token from the
+   * previous response's `next_cursor` field (encodes `"isoTimestamp|id"`).
+   * Returns `next_cursor: null` when no further pages exist.
+   */
   listPostsCursor(filters: {
     author?: string;
     limit: number;
-    cursor?: number;
-  }): Promise<{ posts: Post[]; total: number; hasMore: boolean }>;
+    cursor?: string;
+  }): Promise<{ posts: Post[]; nextCursor: string | null }>;
+
+  /**
+   * Cursor-based governance proposal list.
+   * `cursor` encodes `"proposalId|proposalId"` (numeric, proposal_id DESC).
+   */
+  listGovernanceProposalsCursor(filters: {
+    limit: number;
+    cursor?: string;
+  }): Promise<{ proposals: GovernanceProposal[]; nextCursor: string | null }>;
+
+  /**
+   * Cursor-based pool list. `cursor` encodes `"isoTimestamp|pool_id"`.
+   */
+  listPoolsCursor(filters: {
+    limit: number;
+    cursor?: string;
+  }): Promise<{ pools: Pool[]; nextCursor: string | null }>;
+
+  /**
+   * Cursor-based profiles list. `cursor` encodes `"isoTimestamp|address"`.
+   */
+  listProfilesCursor(filters: {
+    limit: number;
+    cursor?: string;
+  }): Promise<{ profiles: Profile[]; nextCursor: string | null }>;
+
+  /**
+   * Cursor-based on-chain events list sorted by (ledger_sequence DESC, event_index DESC).
+   * `cursor` encodes `"ledgerSequence|eventIndex"` — both numeric.
+   * Optionally filtered by `contract_id` and/or a `topic` prefix string.
+   */
+  listEventsCursor(filters: {
+    limit: number;
+    cursor?: string;
+    contract_id?: string;
+    topic?: string;
+  }): Promise<{ events: ChainEvent[]; nextCursor: string | null }>;
+
   getFeed?(filters: {
     viewer?: string;
     limit: number;

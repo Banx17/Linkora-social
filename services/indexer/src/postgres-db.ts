@@ -420,60 +420,47 @@ export class PostgresDatabase implements Database {
     return { posts, total };
   }
 
+  /**
+   * Cursor-based post list using a composite (created_at, id) keyset.
+   *
+   * The opaque cursor is `base64("isoTimestamp|id")`.  Using a composite key
+   * prevents duplicates/skips when rows share a `created_at` value (e.g.
+   * multiple posts ingested in the same ledger).  Fetches `limit + 1` rows so
+   * we can cheaply detect whether a next page exists without a COUNT query.
+   */
   async listPostsCursor(filters: {
     author?: string;
     limit: number;
-    cursor?: number;
-  }): Promise<{ posts: Post[]; total: number; hasMore: boolean }> {
+    cursor?: string;
+  }): Promise<{ posts: Post[]; nextCursor: string | null }> {
     const { author, limit, cursor } = filters;
 
-    const totalRes = await this.pool.query(
-      `
-      SELECT COUNT(*)::int AS total
-      FROM posts
-      WHERE ($1::text IS NULL OR author = $1)
-      `,
-      [author ?? null]
-    );
-    const total = totalRes.rows[0]?.total ?? 0;
+    const params: unknown[] = [author ?? null];
+    let whereExtra = "";
 
     if (cursor !== undefined) {
-      const res = await this.pool.query(
-        `
-        SELECT
-          id,
-          author,
-          content,
-          deleted_at IS NOT NULL AS deleted,
-          tip_total,
-          like_count,
-          extract(epoch from created_at)::bigint AS created_ledger,
-          CASE WHEN deleted_at IS NULL THEN NULL ELSE extract(epoch from deleted_at)::bigint END AS deleted_ledger
-        FROM posts
-        WHERE ($1::text IS NULL OR author = $1)
-          AND created_at < to_timestamp($2)
-        ORDER BY created_at DESC
-        LIMIT $3
-        `,
-        [author ?? null, cursor, limit + 1]
-      );
-
-      const hasMore = res.rows.length > limit;
-      const rows = hasMore ? res.rows.slice(0, limit) : res.rows;
-
-      const posts: Post[] = rows.map((row) => ({
-        id: BigInt(row.id),
-        author: row.author,
-        content: row.content,
-        deleted: row.deleted,
-        tip_total: BigInt(row.tip_total),
-        like_count: BigInt(row.like_count),
-        created_ledger: Number(row.created_ledger),
-        deleted_ledger: row.deleted_ledger === null ? null : Number(row.deleted_ledger),
-      }));
-
-      return { posts, total, hasMore };
+      let decoded: string;
+      try {
+        decoded = Buffer.from(cursor, "base64").toString("utf-8");
+      } catch {
+        decoded = "";
+      }
+      const sep = decoded.lastIndexOf("|");
+      if (sep > 0 && sep < decoded.length - 1) {
+        const tsValue = decoded.slice(0, sep);
+        const idValue = decoded.slice(sep + 1);
+        const tsDate = new Date(tsValue);
+        if (!Number.isNaN(tsDate.getTime()) && /^\d+$/.test(idValue)) {
+          // Composite keyset: (created_at, id) < (cursorTs, cursorId)
+          // — strictly ordered even when created_at ties.
+          params.push(tsDate.toISOString(), idValue);
+          whereExtra = ` AND (created_at, id) < ($2::timestamptz, $3::bigint)`;
+        }
+      }
     }
+
+    params.push(limit + 1);
+    const limitParam = `$${params.length}`;
 
     const res = await this.pool.query(
       `
@@ -481,17 +468,21 @@ export class PostgresDatabase implements Database {
         id,
         author,
         content,
+        created_at,
         deleted_at IS NOT NULL AS deleted,
         tip_total,
         like_count,
         extract(epoch from created_at)::bigint AS created_ledger,
-        CASE WHEN deleted_at IS NULL THEN NULL ELSE extract(epoch from deleted_at)::bigint END AS deleted_ledger
+        CASE WHEN deleted_at IS NULL THEN NULL
+             ELSE extract(epoch from deleted_at)::bigint
+        END AS deleted_ledger
       FROM posts
       WHERE ($1::text IS NULL OR author = $1)
-      ORDER BY created_at DESC
-      LIMIT $2
+      ${whereExtra}
+      ORDER BY created_at DESC, id DESC
+      LIMIT ${limitParam}
       `,
-      [author ?? null, limit + 1]
+      params
     );
 
     const hasMore = res.rows.length > limit;
@@ -508,7 +499,220 @@ export class PostgresDatabase implements Database {
       deleted_ledger: row.deleted_ledger === null ? null : Number(row.deleted_ledger),
     }));
 
-    return { posts, total, hasMore };
+    let nextCursor: string | null = null;
+    if (hasMore && rows.length > 0) {
+      const last = rows[rows.length - 1];
+      const ts = last.created_at instanceof Date ? last.created_at.toISOString() : String(last.created_at);
+      nextCursor = Buffer.from(`${ts}|${last.id}`, "utf-8").toString("base64");
+    }
+
+    return { posts, nextCursor };
+  }
+
+  /**
+   * Cursor-based governance proposal list sorted by proposal_id DESC.
+   *
+   * The opaque cursor is `base64("proposalId|proposalId")`.  Using proposal_id
+   * as both the sort column and the tie-breaker keeps the implementation
+   * consistent with the composite keyset pattern while remaining simple since
+   * proposal_id is already unique.
+   */
+  async listGovernanceProposalsCursor(filters: {
+    limit: number;
+    cursor?: string;
+  }): Promise<{ proposals: GovernanceProposal[]; nextCursor: string | null }> {
+    const { limit, cursor } = filters;
+
+    const params: unknown[] = [];
+    let whereClause = "WHERE 1=1";
+
+    if (cursor !== undefined) {
+      let decoded: string;
+      try {
+        decoded = Buffer.from(cursor, "base64").toString("utf-8");
+      } catch {
+        decoded = "";
+      }
+      const sep = decoded.lastIndexOf("|");
+      if (sep > 0 && sep < decoded.length - 1) {
+        const idValue = decoded.slice(0, sep);
+        if (/^\d+$/.test(idValue)) {
+          params.push(idValue);
+          whereClause = `WHERE proposal_id < $1::bigint`;
+        }
+      }
+    }
+
+    params.push(limit + 1);
+    const limitParam = `$${params.length}`;
+
+    const res = await this.pool.query(
+      `
+      SELECT proposal_id, proposer, parameter, new_value, votes_for, votes_against,
+             status, created_ledger, updated_ledger
+      FROM governance_proposals
+      ${whereClause}
+      ORDER BY proposal_id DESC
+      LIMIT ${limitParam}
+      `,
+      params
+    );
+
+    const hasMore = res.rows.length > limit;
+    const rows = hasMore ? res.rows.slice(0, limit) : res.rows;
+
+    const proposals: GovernanceProposal[] = rows.map((row) => ({
+      proposal_id: BigInt(row.proposal_id),
+      proposer: row.proposer,
+      parameter: row.parameter,
+      new_value: BigInt(row.new_value),
+      votes_for: BigInt(row.votes_for),
+      votes_against: BigInt(row.votes_against),
+      status: row.status,
+      created_ledger: row.created_ledger,
+      updated_ledger: row.updated_ledger,
+    }));
+
+    let nextCursor: string | null = null;
+    if (hasMore && rows.length > 0) {
+      const last = rows[rows.length - 1];
+      nextCursor = Buffer.from(`${last.proposal_id}|${last.proposal_id}`, "utf-8").toString("base64");
+    }
+
+    return { proposals, nextCursor };
+  }
+
+  /**
+   * Cursor-based pool list sorted by created_ledger DESC, pool_id DESC.
+   *
+   * The opaque cursor is `base64("createdLedger|pool_id")`.
+   */
+  async listPoolsCursor(filters: {
+    limit: number;
+    cursor?: string;
+  }): Promise<{ pools: PoolModel[]; nextCursor: string | null }> {
+    const { limit, cursor } = filters;
+
+    const params: unknown[] = [];
+    let whereExtra = "";
+
+    if (cursor !== undefined) {
+      let decoded: string;
+      try {
+        decoded = Buffer.from(cursor, "base64").toString("utf-8");
+      } catch {
+        decoded = "";
+      }
+      const sep = decoded.lastIndexOf("|");
+      if (sep > 0 && sep < decoded.length - 1) {
+        const ledgerValue = decoded.slice(0, sep);
+        const poolIdValue = decoded.slice(sep + 1);
+        if (/^\d+$/.test(ledgerValue)) {
+          params.push(ledgerValue, poolIdValue);
+          whereExtra = `WHERE (created_ledger, pool_id) < ($1::bigint, $2::text)`;
+        }
+      }
+    }
+
+    params.push(limit + 1);
+    const limitParam = `$${params.length}`;
+
+    const res = await this.pool.query(
+      `
+      SELECT pool_id, token, balance, admins, threshold, created_ledger, updated_ledger
+      FROM pools
+      ${whereExtra}
+      ORDER BY created_ledger DESC, pool_id DESC
+      LIMIT ${limitParam}
+      `,
+      params
+    );
+
+    const hasMore = res.rows.length > limit;
+    const rows = hasMore ? res.rows.slice(0, limit) : res.rows;
+
+    const pools: PoolModel[] = rows.map((row) => ({
+      pool_id: row.pool_id,
+      token: row.token,
+      balance: BigInt(row.balance),
+      admins: row.admins ?? [],
+      threshold: Number(row.threshold),
+      created_ledger: Number(row.created_ledger),
+      updated_ledger: Number(row.updated_ledger),
+    }));
+
+    let nextCursor: string | null = null;
+    if (hasMore && rows.length > 0) {
+      const last = rows[rows.length - 1];
+      nextCursor = Buffer.from(`${last.created_ledger}|${last.pool_id}`, "utf-8").toString("base64");
+    }
+
+    return { pools, nextCursor };
+  }
+
+  /**
+   * Cursor-based profiles list sorted by updated_ledger DESC, address DESC.
+   *
+   * The opaque cursor is `base64("updatedLedger|address")`.
+   */
+  async listProfilesCursor(filters: {
+    limit: number;
+    cursor?: string;
+  }): Promise<{ profiles: import("./db").Profile[]; nextCursor: string | null }> {
+    const { limit, cursor } = filters;
+
+    const params: unknown[] = [];
+    let whereExtra = "";
+
+    if (cursor !== undefined) {
+      let decoded: string;
+      try {
+        decoded = Buffer.from(cursor, "base64").toString("utf-8");
+      } catch {
+        decoded = "";
+      }
+      const sep = decoded.lastIndexOf("|");
+      if (sep > 0 && sep < decoded.length - 1) {
+        const ledgerValue = decoded.slice(0, sep);
+        const addrValue = decoded.slice(sep + 1);
+        if (/^\d+$/.test(ledgerValue)) {
+          params.push(ledgerValue, addrValue);
+          whereExtra = `WHERE (updated_ledger, address) < ($1::bigint, $2::text)`;
+        }
+      }
+    }
+
+    params.push(limit + 1);
+    const limitParam = `$${params.length}`;
+
+    const res = await this.pool.query(
+      `
+      SELECT address, username, creator_token, updated_ledger
+      FROM profiles
+      ${whereExtra}
+      ORDER BY updated_ledger DESC, address DESC
+      LIMIT ${limitParam}
+      `,
+      params
+    );
+
+    const hasMore = res.rows.length > limit;
+    const rows = hasMore ? res.rows.slice(0, limit) : res.rows;
+
+    const profiles: import("./db").Profile[] = rows.map((row) => ({
+      address: row.address,
+      username: row.username,
+      creator_token: row.creator_token,
+      updated_ledger: Number(row.updated_ledger),
+    }));
+
+    let nextCursor: string | null = null;
+    if (hasMore && rows.length > 0) {
+      const last = rows[rows.length - 1];
+      nextCursor = Buffer.from(`${last.updated_ledger}|${last.address}`, "utf-8").toString("base64");
+    }
+
+    return { profiles, nextCursor };
   }
 
   // ───────────────────────────────── Likes ────────────────────────────────────
@@ -1002,5 +1206,100 @@ export class PostgresDatabase implements Database {
       [address]
     );
     return res.rows[0]?.x25519_pubkey ?? null;
+  }
+
+  // ─────────────────────────── Chain Events (raw_events) ──────────────────────
+
+  /**
+   * Cursor-based on-chain event list sorted by (ledger_sequence DESC, event_index DESC).
+   *
+   * The opaque cursor is `base64("ledgerSequence|eventIndex")`. Both fields
+   * are numeric. The composite keyset avoids skipping or duplicating events
+   * that share the same ledger when new events are ingested between pages.
+   *
+   * Optional filters:
+   *  - `contract_id` — restricts results to a single contract.
+   *  - `topic` — restricts results to events whose first topic matches the
+   *    value (case-sensitive exact match against `topic[1]`).
+   */
+  async listEventsCursor(filters: {
+    limit: number;
+    cursor?: string;
+    contract_id?: string;
+    topic?: string;
+  }): Promise<{ events: import("./db").ChainEvent[]; nextCursor: string | null }> {
+    const { limit, cursor, contract_id, topic } = filters;
+
+    const params: unknown[] = [];
+    const conditions: string[] = [];
+
+    if (cursor !== undefined) {
+      let decoded: string;
+      try {
+        decoded = Buffer.from(cursor, "base64").toString("utf-8");
+      } catch {
+        decoded = "";
+      }
+      const sep = decoded.lastIndexOf("|");
+      if (sep > 0 && sep < decoded.length - 1) {
+        const ledgerValue = decoded.slice(0, sep);
+        const indexValue = decoded.slice(sep + 1);
+        if (/^\d+$/.test(ledgerValue) && /^\d+$/.test(indexValue)) {
+          params.push(ledgerValue, indexValue);
+          // Composite keyset: strictly ordered even when ledger_sequence ties.
+          conditions.push(`(ledger_sequence, event_index) < ($${params.length - 1}::bigint, $${params.length}::int)`);
+        }
+      }
+    }
+
+    if (contract_id !== undefined) {
+      params.push(contract_id);
+      conditions.push(`contract_id = $${params.length}`);
+    }
+
+    if (topic !== undefined) {
+      params.push(topic);
+      conditions.push(`topic[1] = $${params.length}`);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+    params.push(limit + 1);
+    const limitParam = `$${params.length}`;
+
+    const res = await this.pool.query(
+      `
+      SELECT id, ledger_sequence, event_index, contract_id, topic, data, processed_at
+      FROM raw_events
+      ${whereClause}
+      ORDER BY ledger_sequence DESC, event_index DESC
+      LIMIT ${limitParam}
+      `,
+      params
+    );
+
+    const hasMore = res.rows.length > limit;
+    const rows = hasMore ? res.rows.slice(0, limit) : res.rows;
+
+    const events: import("./db").ChainEvent[] = rows.map((row) => ({
+      id: BigInt(row.id),
+      ledger_sequence: Number(row.ledger_sequence),
+      event_index: Number(row.event_index),
+      contract_id: row.contract_id,
+      topic: row.topic ?? [],
+      data: row.data ?? {},
+      processed_at: row.processed_at ?? null,
+    }));
+
+    let nextCursor: string | null = null;
+    if (hasMore && rows.length > 0) {
+      const last = rows[rows.length - 1];
+      nextCursor = Buffer.from(
+        `${last.ledger_sequence}|${last.event_index}`,
+        "utf-8"
+      ).toString("base64");
+    }
+
+    return { events, nextCursor };
   }
 }
