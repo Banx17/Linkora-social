@@ -597,3 +597,148 @@ describe("domain-processor: post_removed_by_moderation", () => {
     ).resolves.toBeUndefined();
   });
 });
+
+// ── cache invalidation ────────────────────────────────────────────────────────
+
+function makeCache(): jest.Mocked<import("../cache").CacheService> {
+  return {
+    get: jest.fn().mockResolvedValue(null),
+    set: jest.fn().mockResolvedValue(undefined),
+    del: jest.fn().mockResolvedValue(undefined),
+    invalidate: jest.fn().mockResolvedValue(undefined),
+  } as unknown as jest.Mocked<import("../cache").CacheService>;
+}
+
+describe("domain-processor: cache invalidation", () => {
+  it("invalidates profile and profile-list caches on profile_set", async () => {
+    const db = makeDb();
+    const cache = makeCache();
+    const processor = createDomainProcessor(makePool(), makeNotificationService(), db, cache);
+
+    await processor(
+      makePgClient(),
+      makeIngestEvent("profile_set", { user: "GABC", username: "alice", creator_token: "" })
+    );
+
+    // Profile key + profile list pattern must both be invalidated
+    expect(cache.invalidate).toHaveBeenCalledWith(expect.stringContaining("GABC"));
+    expect(cache.invalidate).toHaveBeenCalledWith(expect.stringContaining("profiles:"));
+  });
+
+  it("invalidates profile and profile-list caches on profile_deleted", async () => {
+    const db = makeDb();
+    const cache = makeCache();
+    const processor = createDomainProcessor(makePool(), makeNotificationService(), db, cache);
+
+    await processor(
+      makePgClient(),
+      makeIngestEvent("profile_deleted", { user: "GDEL" })
+    );
+
+    expect(cache.invalidate).toHaveBeenCalledWith(expect.stringContaining("GDEL"));
+    expect(cache.invalidate).toHaveBeenCalledWith(expect.stringContaining("profiles:"));
+  });
+
+  it("invalidates all feed caches on post_created", async () => {
+    const db = makeDb();
+    const cache = makeCache();
+    const processor = createDomainProcessor(makePool(), makeNotificationService(), db, cache);
+
+    await processor(
+      makePgClient(),
+      makeIngestEvent("post_created", { id: 1n, author: "GAUTHOR", content: "hello" })
+    );
+
+    // Global feed flush + author-specific feed flush
+    const patterns = (cache.invalidate as jest.Mock).mock.calls.map(
+      (c: unknown[]) => c[0] as string
+    );
+    expect(patterns.some((p) => p.includes("feed:"))).toBe(true);
+  });
+
+  it("invalidates all feed caches on post_deleted", async () => {
+    const db = makeDb();
+    const cache = makeCache();
+    const processor = createDomainProcessor(makePool(), makeNotificationService(), db, cache);
+
+    await processor(
+      makePgClient(),
+      makeIngestEvent("post_deleted", { post_id: 5n })
+    );
+
+    const patterns = (cache.invalidate as jest.Mock).mock.calls.map(
+      (c: unknown[]) => c[0] as string
+    );
+    expect(patterns.some((p) => p.includes("feed:"))).toBe(true);
+  });
+
+  it("invalidates follower feed cache on follow", async () => {
+    const db = makeDb();
+    const cache = makeCache();
+    const processor = createDomainProcessor(makePool(), makeNotificationService(), db, cache);
+
+    await processor(
+      makePgClient(),
+      makeIngestEvent("follow", { follower: "GFOLLOWER", followee: "GFOLLOWEE" })
+    );
+
+    expect(cache.invalidate).toHaveBeenCalledWith(expect.stringContaining("GFOLLOWER"));
+  });
+
+  it("invalidates follower feed cache on unfollow", async () => {
+    const db = makeDb();
+    const cache = makeCache();
+    const processor = createDomainProcessor(makePool(), makeNotificationService(), db, cache);
+
+    await processor(
+      makePgClient(),
+      makeIngestEvent("unfollow", { follower: "GFOLLOWER", followee: "GFOLLOWEE" })
+    );
+
+    expect(cache.invalidate).toHaveBeenCalledWith(expect.stringContaining("GFOLLOWER"));
+  });
+
+  it("invalidates pool list cache on pool_created", async () => {
+    const db = makeDb();
+    const cache = makeCache();
+    const processor = createDomainProcessor(makePool(), makeNotificationService(), db, cache);
+
+    await processor(
+      makePgClient(),
+      makeIngestEvent("pool_created", {
+        pool_id: "P1",
+        token: "TOK",
+        admins: ["GADMIN"],
+        threshold: 1,
+      })
+    );
+
+    expect(cache.invalidate).toHaveBeenCalledWith(expect.stringContaining("pools:"));
+  });
+
+  it("invalidates pool list cache on pool_deposit", async () => {
+    const db = makeDb();
+    const cache = makeCache();
+    const processor = createDomainProcessor(makePool(), makeNotificationService(), db, cache);
+
+    await processor(
+      makePgClient(),
+      makeIngestEvent("pool_deposit", { pool_id: "P1", amount: 100n })
+    );
+
+    expect(cache.invalidate).toHaveBeenCalledWith(expect.stringContaining("pools:"));
+  });
+
+  it("does not call invalidate when cache is not provided", async () => {
+    const db = makeDb();
+    // No cache passed — should not throw
+    const processor = createDomainProcessor(makePool(), makeNotificationService(), db);
+
+    await expect(
+      processor(
+        makePgClient(),
+        makeIngestEvent("profile_set", { user: "GABC", username: "alice" })
+      )
+    ).resolves.toBeUndefined();
+  });
+});
