@@ -3,10 +3,10 @@
 /**
  * Cursor-paginated "infinite query" hook for the feed.
  *
- * The repository does not ship TanStack Query and issue #1724 explicitly
- * forbids adding third-party libraries (the IntersectionObserver work must not
- * pull in a dependency), so this hook provides the small subset of
- * `useInfiniteQuery` behaviour the feed needs:
+ * This hook predates the app-wide TanStack Query adoption (see
+ * `contexts/QueryProvider`). It still provides the small subset of
+ * `useInfiniteQuery` behaviour the feed needs, and remains the migration
+ * target for the real `useInfiniteQuery`:
  *
  *  - keeps an ordered array of pages (cursor in / cursor out),
  *  - exposes `fetchNextPage`, `hasNextPage` and `isFetchingNextPage`,

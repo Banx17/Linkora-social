@@ -14,6 +14,8 @@ import { CommandPalette } from "@/components/CommandPalette";
 import { ServiceWorkerRegistration } from "@/components/ServiceWorkerRegistration";
 import { ResourceHints, ThirdPartyScripts } from "@/components/ThirdPartyScripts";
 import { ConsentBanner } from "@/components/ConsentBanner";
+import { QueryProvider } from "@/contexts/QueryProvider";
+import { Toaster } from "@/components/ui/Toaster";
 import { InstallPromptProvider, InstallPromptBanner } from "@/contexts/InstallPromptContext";
 
 export const metadata: Metadata = {
@@ -48,9 +50,10 @@ export const metadata: Metadata = {
  */
 export function AppProviders({ children }: { children: React.ReactNode }) {
   return (
-    <ThemeProvider>
-      <WalletProvider>
-        {/* KeyboardShortcutsProvider reads the wallet via useWallet, so it must
+    <QueryProvider>
+      <ThemeProvider>
+        <WalletProvider>
+          {/* KeyboardShortcutsProvider reads the wallet via useWallet, so it must
             sit inside WalletProvider. NavBar and KeyboardShortcutsModal consume
             its context, so both must sit inside this provider. */}
         <KeyboardShortcutsProvider>

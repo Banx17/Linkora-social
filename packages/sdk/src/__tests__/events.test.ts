@@ -195,6 +195,66 @@ describe("parseContractEvent", () => {
     expect(evt.amount).toBe(500n);
   });
 
+  it("decodes WithdrawalSlippageExceededEvent", () => {
+    const raw = rawEvent({
+      topics: [enc("withdrawal_slippage_exceeded")],
+      data: enc({
+        pool_id: "rewards",
+        requested_amount: "500",
+        received_amount: "400",
+        min_out_amount: "450",
+      }),
+    });
+    const evt = parseContractEvent(raw) as Extract<
+      LinkoraEvent,
+      { type: "withdrawal_slippage_exceeded" }
+    >;
+    expect(evt).not.toBeNull();
+    expect(evt.type).toBe("withdrawal_slippage_exceeded");
+    expect(evt.pool_id).toBe("rewards");
+    expect(evt.requested_amount).toBe(500n);
+    expect(evt.received_amount).toBe(400n);
+    expect(evt.min_out_amount).toBe(450n);
+  });
+
+  it("decodes PostCommittedEvent", () => {
+    const raw = rawEvent({
+      topics: [enc("post_committed")],
+      data: enc({
+        version: 1,
+        post_id: 7,
+        author: "GAUTHOR",
+        content_hash: "aabbcc",
+        reveal_time: 1700000000,
+      }),
+    });
+    const evt = parseContractEvent(raw) as Extract<LinkoraEvent, { type: "post_committed" }>;
+    expect(evt).not.toBeNull();
+    expect(evt.type).toBe("post_committed");
+    expect(evt.post_id).toBe(7n);
+    expect(evt.author).toBe("GAUTHOR");
+    expect(evt.content_hash).toBe("aabbcc");
+    expect(evt.reveal_time).toBe(1700000000n);
+  });
+
+  it("decodes PostRevealedEvent", () => {
+    const raw = rawEvent({
+      topics: [enc("post_revealed")],
+      data: enc({
+        version: 1,
+        post_id: 7,
+        author: "GAUTHOR",
+        content_hash: "aabbcc",
+      }),
+    });
+    const evt = parseContractEvent(raw) as Extract<LinkoraEvent, { type: "post_revealed" }>;
+    expect(evt).not.toBeNull();
+    expect(evt.type).toBe("post_revealed");
+    expect(evt.post_id).toBe(7n);
+    expect(evt.author).toBe("GAUTHOR");
+    expect(evt.content_hash).toBe("aabbcc");
+  });
+
   it("decodes GovProposalCreatedEvent", () => {
     const raw = rawEvent({
       topics: [enc("gov_proposal_created")],

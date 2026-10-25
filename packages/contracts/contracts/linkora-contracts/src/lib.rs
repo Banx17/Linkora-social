@@ -71,6 +71,9 @@ pub enum StorageKey {
     // ── Content-hash anchoring (off-chain media integrity) ────────────────
     PostContentHash(u64), // persistent: post_id -> BytesN<32> off-chain content hash
 
+    // ── Time-locked posts (commit-reveal) ──────────────────────────────────
+    CommittedPost(u64), // persistent: post_id -> CommittedPost (hash + reveal time)
+
     // ── Moderation appeals ────────────────────────────────────────────────
     RemovedPost(u64), // persistent: post_id -> Post snapshot removed by moderation
     ModerationRecord(u64), // persistent: post_id -> ModerationRecord (appeal deadline)
@@ -137,6 +140,14 @@ const MAX_SUGGEST_SCAN: u32 = 200;
 /// Ledgers an author has to appeal a moderation decision (~2 days at 5s/ledger).
 const APPEAL_WINDOW_LEDGERS: u32 = 34_560;
 
+// ── Time-locked Posts ──────────────────────────────────────────────────────────
+//
+// COMMITTED_POST_PLACEHOLDER: content stored for a post whose real content is
+// still committed. The post exists (and shows up in feeds and indexers) as a
+// placeholder until `reveal_post` swaps in the revealed content.
+
+const COMMITTED_POST_PLACEHOLDER: &str = "[committed post]";
+
 // ── Data Types ────────────────────────────────────────────────────────────────
 
 #[contracttype]
@@ -165,6 +176,38 @@ pub struct Pool {
     pub balance: i128,
     pub admins: Vec<Address>,
     pub threshold: u32,
+}
+
+/// A post whose content is still hidden. The content hash committed here is
+/// the sha256 of the bytes revealed in `reveal_post`.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CommittedPost {
+    pub post_id: u64,
+    pub author: Address,
+    pub content_hash: BytesN<32>,
+    pub reveal_time: u64,
+    pub timestamp: u64,
+}
+
+// ── Pool Withdrawal Slippage ──────────────────────────────────────────────────
+//
+// POOL_WITHDRAW_FEE_BPS: fee charged on pool withdrawals, in basis points of the
+// withdrawn amount. Pools are multisig treasuries that move tokens 1:1, so
+// withdrawals carry no price impact and are currently fee-free (the protocol
+// fee only applies to tips): the rate is zero and a withdrawal delivers
+// exactly the requested amount.
+//
+// Slippage formula: received = requested - requested * fee_bps / 10_000.
+//
+// `min_out_amount` is compared against the *received* amount, not the
+// requested one, so the guard keeps its meaning once withdrawal fees exist
+// (tiered pool fee model): the fee is subtracted in exactly one place.
+const POOL_WITHDRAW_FEE_BPS: i128 = 0;
+
+/// Amount actually delivered to the recipient for a withdrawal of `requested`.
+fn pool_withdraw_received_amount(requested: i128) -> i128 {
+    requested - (requested * POOL_WITHDRAW_FEE_BPS / 10_000)
 }
 
 #[contracttype]
@@ -435,6 +478,35 @@ pub struct PostCreatedEvent {
     pub author: Address,
 }
 
+/// Published when a creator commits to a post's content hash and reveal time.
+/// The post exists as a placeholder until it is revealed.
+#[contractevent]
+#[derive(Clone)]
+pub struct PostCommittedEvent {
+    #[topic]
+    pub version: u32,
+    #[topic]
+    pub post_id: u64,
+    #[topic]
+    pub author: Address,
+    pub content_hash: BytesN<32>,
+    pub reveal_time: u64,
+}
+
+/// Published when a committed post is revealed. The revealed content hashes to
+/// the hash committed in the `PostCommittedEvent`.
+#[contractevent]
+#[derive(Clone)]
+pub struct PostRevealedEvent {
+    #[topic]
+    pub version: u32,
+    #[topic]
+    pub post_id: u64,
+    #[topic]
+    pub author: Address,
+    pub content_hash: BytesN<32>,
+}
+
 #[contractevent]
 #[derive(Clone)]
 pub struct TipEvent {
@@ -470,6 +542,22 @@ pub struct PoolWithdrawEvent {
     #[topic]
     pub pool_id: Symbol,
     pub amount: i128,
+}
+
+/// Published when a withdrawal would deliver less than the caller's
+/// `min_out_amount`. The withdrawal then reverts, so the event is rolled back
+/// with the failed invocation and is only observable in the failed-call
+/// diagnostics (it never lands in the committed ledger events).
+#[contractevent(topics = ["withdrawal_slippage_exceeded"])]
+#[derive(Clone)]
+pub struct WithdrawalSlippageExceededEvent {
+    #[topic]
+    pub version: u32,
+    #[topic]
+    pub pool_id: Symbol,
+    pub requested_amount: i128,
+    pub received_amount: i128,
+    pub min_out_amount: i128,
 }
 
 #[contractevent]
@@ -2040,6 +2128,136 @@ impl LinkoraContract {
         Self::get_post_content_hash(env, post_id) == Some(expected)
     }
 
+    /// Commit to the content of a new post without publishing it yet.
+    ///
+    /// The author commits `content_hash` — the sha256 of the bytes that will be
+    /// revealed — and the earliest `reveal_time` at which the content may be
+    /// revealed. The hash is the sha256 of the exact string passed to
+    /// `reveal_post`, so a salt can be used by prefixing it to the content
+    /// (`sha256(salt || content)`).
+    ///
+    /// A placeholder post is created right away, so the post is visible in
+    /// feeds and indexers while it is committed. Reveal it with
+    /// `reveal_post` once `reveal_time` has passed.
+    pub fn commit_post(
+        env: Env,
+        author: Address,
+        content_hash: BytesN<32>,
+        reveal_time: u64,
+    ) -> u64 {
+        Self::bump_instance(&env);
+        validate_non_default_address(&env, "author", &author);
+        author.require_auth();
+        Self::require_not_paused(&env, PauseModule::Posts);
+        require_with_error!(
+            &env,
+            reveal_time > env.ledger().timestamp(),
+            "reveal time must be in the future"
+        );
+
+        let placeholder = String::from_str(&env, COMMITTED_POST_PLACEHOLDER);
+        validate_content(&env, &placeholder);
+        let post_id = Self::insert_post(&env, author.clone(), placeholder);
+
+        let key = StorageKey::CommittedPost(post_id);
+        env.storage().persistent().set(
+            &key,
+            &CommittedPost {
+                post_id,
+                author: author.clone(),
+                content_hash: content_hash.clone(),
+                reveal_time,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+        Self::bump(&env, &key);
+
+        PostCommittedEvent {
+            version: EVENT_VERSION,
+            post_id,
+            author,
+            content_hash,
+            reveal_time,
+        }
+        .publish(&env);
+        post_id
+    }
+
+    /// Reveal the content of a committed post.
+    ///
+    /// Reverts when the post was not committed ("post is not committed"), when
+    /// the caller is not the author ("only author can reveal post"), before
+    /// `reveal_time` ("reveal time not reached") and when the revealed
+    /// content does not hash to the committed hash ("content hash mismatch").
+    pub fn reveal_post(env: Env, author: Address, post_id: u64, content: String) {
+        Self::bump_instance(&env);
+        validate_non_default_address(&env, "author", &author);
+        author.require_auth();
+        require_with_error!(&env, post_id > 0, "post id must be positive");
+        Self::require_not_paused(&env, PauseModule::Posts);
+
+        let key = StorageKey::CommittedPost(post_id);
+        let committed: CommittedPost = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic!("post is not committed: {}", post_id));
+        assert!(committed.author == author, "only author can reveal post");
+        require_with_error!(
+            &env,
+            env.ledger().timestamp() >= committed.reveal_time,
+            "reveal time not reached"
+        );
+
+        validate_content(&env, &content);
+        assert!(
+            Self::post_content_hash(&env, &content) == committed.content_hash,
+            "content hash mismatch"
+        );
+
+        let post_key = StorageKey::Post(post_id);
+        let mut post: Post = env
+            .storage()
+            .persistent()
+            .get(&post_key)
+            .unwrap_or_else(|| {
+                panic!("post does not exist: {}", post_id);
+            });
+        post.content = content;
+        env.storage().persistent().set(&post_key, &post);
+        Self::bump(&env, &post_key);
+
+        env.storage().persistent().remove(&key);
+        Self::bump(&env, &key);
+
+        PostRevealedEvent {
+            version: EVENT_VERSION,
+            post_id,
+            author,
+            content_hash: committed.content_hash,
+        }
+        .publish(&env);
+    }
+
+    /// The commit state of a post, or `None` when the post is not committed
+    /// (never committed, or already revealed).
+    pub fn get_committed_post(env: Env, post_id: u64) -> Option<CommittedPost> {
+        require_with_error!(&env, post_id > 0, "post id must be positive");
+        let key = StorageKey::CommittedPost(post_id);
+        let result: Option<CommittedPost> = env.storage().persistent().get(&key);
+        if result.is_some() {
+            Self::bump(&env, &key);
+        }
+        result
+    }
+
+    /// sha256 of the raw bytes of `content`.
+    fn post_content_hash(env: &Env, content: &String) -> BytesN<32> {
+        let mut buf = alloc::vec![0u8; content.len() as usize];
+        content.copy_into_slice(&mut buf);
+        env.crypto().sha256(&Bytes::from_slice(env, &buf)).into()
+    }
+
     pub fn delete_post(env: Env, author: Address, post_id: u64) {
         Self::bump_instance(&env);
         author.require_auth();
@@ -2474,18 +2692,33 @@ impl LinkoraContract {
     }
 
     /// Withdraw from a pool. Requires `threshold` valid admin signatures.
+    ///
+    /// `min_out_amount` is the minimum amount the recipient must receive. The
+    /// received amount is `requested - requested * fee_bps / 10_000` (see
+    /// `pool_withdraw_received_amount`); when it is below `min_out_amount` the
+    /// withdrawal reverts with `"slippage exceeded"` and publishes a
+    /// `WithdrawalSlippageExceededEvent`.
+    ///
+    /// `deadline` is a Unix timestamp: once the ledger timestamp is past it the
+    /// withdrawal reverts with `"deadline expired"`.
     pub fn pool_withdraw(
         env: Env,
         signers: Vec<Address>,
         pool_id: Symbol,
         amount: i128,
         recipient: Address,
+        min_out_amount: Option<i128>,
+        deadline: Option<u64>,
     ) {
         Self::bump_instance(&env);
         Self::require_not_paused(&env, PauseModule::Pools);
         validate_address_list(&env, "signers", &signers);
         validate_non_default_address(&env, "recipient", &recipient);
         validate_amount(&env, "withdraw amount", amount);
+        if let Some(deadline) = deadline {
+            assert!(env.ledger().timestamp() <= deadline, "deadline expired");
+        }
+
         let key = StorageKey::Pool(pool_id.clone());
         let mut pool: Pool = env
             .storage()
@@ -2502,6 +2735,21 @@ impl LinkoraContract {
             signer.require_auth();
         }
         assert!(pool.balance >= amount, "low balance");
+
+        let received = pool_withdraw_received_amount(amount);
+        if let Some(min_out) = min_out_amount {
+            if received < min_out {
+                WithdrawalSlippageExceededEvent {
+                    version: EVENT_VERSION,
+                    pool_id: pool_id.clone(),
+                    requested_amount: amount,
+                    received_amount: received,
+                    min_out_amount: min_out,
+                }
+                .publish(&env);
+                panic!("slippage exceeded");
+            }
+        }
 
         pool.balance -= amount;
         env.storage().persistent().set(&key, &pool);

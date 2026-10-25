@@ -2,8 +2,9 @@
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
-import { LinkoraClient } from "linkora-sdk";
 import { OptimisticStore } from "@/lib/optimisticStore";
+import { useFollowMutation } from "@/hooks/useFollowMutation";
+import { submitFollowTransaction } from "@/lib/followTransaction";
 import { AnimatedList } from "@/components/AnimatedList";
 import { VerificationBadge, type VerificationLevel } from "@/components/VerificationBadge";
 
@@ -52,16 +53,8 @@ export function FollowList({ address, type }: FollowListProps) {
   const [, setTick] = useState(0);
 
   const loadingRef = useRef(false);
-  const client = useRef<LinkoraClient | null>(null);
 
   useEffect(() => {
-    client.current = new LinkoraClient({
-      contractId:
-        process.env.NEXT_PUBLIC_CONTRACT_ID ||
-        "CBQHLSNMBF4HS3UX2PV72T75V2SXE7M2EZZTQ6YC5DSXIGGY4NPSAFAF",
-      rpcUrl: process.env.NEXT_PUBLIC_SOROBAN_RPC_URL || "https://soroban-testnet.stellar.org",
-    });
-
     if (typeof window !== "undefined") {
       const storedUser =
         localStorage.getItem("linkora_wallet_address") ||
@@ -132,38 +125,6 @@ export function FollowList({ address, type }: FollowListProps) {
     }
   }, [hasMore, load, loading, page]);
 
-  const handleToggleFollow = async (targetUser: FollowUser) => {
-    if (!currentUser) {
-      // Surface the error inline — no window.alert
-      setError("Please connect your wallet to follow users.");
-      return;
-    }
-
-    const targetAddress = targetUser.address;
-    const isFollowing = OptimisticStore.isFollowing(targetAddress);
-
-    OptimisticStore.setFollowing(targetAddress, !isFollowing);
-    OptimisticStore.setPending(targetAddress, { isPending: true });
-
-    try {
-      const isMockAddress = targetAddress.includes("XXXX") || currentUser.includes("XXXX");
-      if (client.current && !isMockAddress) {
-        if (isFollowing) {
-          await client.current.unfollow(currentUser, targetAddress);
-        } else {
-          await client.current.follow(currentUser, targetAddress);
-        }
-      }
-      await new Promise((r) => setTimeout(r, 600));
-    } catch (err) {
-      OptimisticStore.setFollowing(targetAddress, isFollowing);
-      // Surface the error inline — no window.alert
-      setError(err instanceof Error ? err.message : "Action failed. Please try again.");
-    } finally {
-      OptimisticStore.setPending(targetAddress, { isPending: false });
-    }
-  };
-
   const visibleUsers = users.filter((u) => {
     const isBlocked = blockedList.includes(u.address);
     if (isBlocked) return false;
@@ -224,8 +185,6 @@ export function FollowList({ address, type }: FollowListProps) {
         getKey={(user) => user.address}
         className="flex flex-col gap-3"
         renderItem={(user, state) => {
-          const isFollowing = OptimisticStore.isFollowing(user.address);
-          const isPending = OptimisticStore.isPending(user.address);
           const isMe = currentUser?.toLowerCase() === user.address.toLowerCase();
 
           return (
@@ -271,23 +230,11 @@ export function FollowList({ address, type }: FollowListProps) {
                 </div>
 
                 {!isMe && currentUser && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleToggleFollow(user);
-                    }}
-                    disabled={isPending}
-                    className={`flex h-[36px] w-full flex-shrink-0 items-center justify-center rounded-lg px-4 py-1.5 text-sm font-semibold transition-all sm:w-auto ${
-                      isFollowing
-                        ? "border border-[var(--border)] bg-[var(--muted)] text-[var(--foreground)] hover:opacity-80"
-                        : "bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)]"
-                    } ${isPending ? "cursor-not-allowed opacity-55" : "cursor-pointer"}`}
-                    aria-label={
-                      isFollowing ? `Unfollow ${user.username}` : `Follow ${user.username}`
-                    }
-                  >
-                    {isPending ? "Updating..." : isFollowing ? "Following" : "Follow"}
-                  </button>
+                  <FollowListButton
+                    username={user.username}
+                    address={user.address}
+                    follower={currentUser}
+                  />
                 )}
               </div>
             </li>
@@ -329,5 +276,63 @@ export function FollowList({ address, type }: FollowListProps) {
         </nav>
       )}
     </div>
+  );
+}
+
+/**
+ * Row-level follow button.
+ *
+ * Immediate visual toggle + optimistic follower feedback; the on-chain
+ * transaction runs in the background and rolls back with a toast on failure.
+ * Demo/mock addresses short-circuit the network call the same way the old
+ * component did.
+ */
+function FollowListButton({
+  username,
+  address,
+  follower,
+}: {
+  username: string;
+  address: string;
+  follower: string;
+}) {
+  const initialFollowing = OptimisticStore.isFollowing(address);
+  const { isFollowing, isPending, toggle } = useFollowMutation({
+    follower,
+    followee: address,
+    initialIsFollowing: initialFollowing,
+    submitFollow: async (input) => {
+      const isMockAddress = input.follower.includes("XXXX") || input.followee.includes("XXXX");
+      if (isMockAddress) {
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        return;
+      }
+      await submitFollowTransaction(input);
+    },
+  });
+
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        toggle();
+      }}
+      disabled={isPending}
+      aria-busy={isPending}
+      className={`flex h-[36px] w-full flex-shrink-0 items-center justify-center rounded-lg px-4 py-1.5 text-sm font-semibold transition-all sm:w-auto ${
+        isFollowing
+          ? "border border-[var(--border)] bg-[var(--muted)] text-[var(--foreground)] hover:opacity-80"
+          : "bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)]"
+      } ${isPending ? "cursor-wait opacity-55" : "cursor-pointer"}`}
+      aria-label={isFollowing ? `Unfollow ${username}` : `Follow ${username}`}
+    >
+      {isPending
+        ? isFollowing
+          ? "Following…"
+          : "Unfollowing…"
+        : isFollowing
+          ? "Following"
+          : "Follow"}
+    </button>
   );
 }

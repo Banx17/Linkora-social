@@ -42,6 +42,7 @@ import { RawEventsRetentionManager } from "./retention";
 import { assertSchemaVersion } from "./schema-version";
 import { streamHealth } from "./metrics";
 import { postgresDomainCursorStore } from "./state";
+import { CacheService, NoopCacheService } from "./cache";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -133,7 +134,25 @@ const healthMonitor = new HealthMonitor(pgPool, STELLAR_RPC_URL);
 const abortController = new AbortController();
 const shutdownFlag = { active: false };
 
-const apiApp = createApp(new PostgresDatabase(pgPool), pgPool, healthMonitor, shutdownFlag);
+// ── Response cache ────────────────────────────────────────────────────────────
+// When REDIS_CACHE_URL is set, boot an ioredis client and wrap it in
+// CacheService. Otherwise fall back to the no-op implementation so the API
+// still starts without Redis.
+let responseCache: CacheService;
+if (cfg.redisCacheUrl) {
+  // Dynamic require keeps ioredis out of the ESM boundary issues in tests.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const IORedis = require("ioredis") as typeof import("ioredis").default;
+  const redisClient = new IORedis(cfg.redisCacheUrl, { lazyConnect: true });
+  redisClient.on("error", (err: Error) => logger.warn({ err }, "Redis cache client error"));
+  responseCache = new CacheService(redisClient);
+  logger.info({ url: cfg.redisCacheUrl }, "Redis response cache enabled");
+} else {
+  responseCache = new NoopCacheService();
+  logger.info("Redis response cache disabled (REDIS_CACHE_URL not set)");
+}
+
+const apiApp = createApp(new PostgresDatabase(pgPool), pgPool, healthMonitor, shutdownFlag, cfg.mediaUpload, responseCache);
 const httpServer = http.createServer(apiApp);
 
 const wsHandle = attachWebSocketServer(httpServer, bus, { path: "/ws" });

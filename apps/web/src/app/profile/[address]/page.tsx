@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useProfile, type IndexerPost } from "@/hooks/useProfile";
 import { useWallet } from "@/hooks/useWallet";
-import { OptimisticStore, useOptimisticFollow } from "@/lib/optimisticStore";
+import { useFollowMutation } from "@/hooks/useFollowMutation";
 import {
   useLinkoraEvent,
   useWatchAddress,
@@ -14,6 +14,9 @@ import {
 } from "@/lib/LinkoraEventSubscriber";
 import { FollowDrawer } from "@/components/profile/FollowDrawer";
 import { CreatorTokenPanel } from "@/components/profile/CreatorTokenPanel";
+import { VerificationBadge } from "@/components/VerificationBadge";
+import { Address } from "@stellar/stellar-sdk";
+import { ResponsiveImage } from "@/components/ui/ResponsiveImage";
 import { ProfileHeaderSkeleton } from "@/components/skeletons";
 import {
   TransactionBuilder,
@@ -28,6 +31,7 @@ import { LinkoraClient } from "linkora-sdk";
 import { buildSignAndSubmit } from "@/lib/tx";
 import { addToBlockedList, removeFromBlockedList } from "@/lib/blockedStore";
 import { getProfileAvatar, getProfileCover } from "@/lib/profileMedia";
+import { trackProfileViewed } from "@/lib/gtag";
 
 const CONTRACT_ID = process.env.NEXT_PUBLIC_CONTRACT_ID || "CDUMMY";
 const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL || "https://soroban-testnet.stellar.org";
@@ -81,7 +85,6 @@ export default function ProfilePage() {
   const [drawerType, setDrawerType] = useState<"followers" | "following">("followers");
   const [copyFeedback, setCopyFeedback] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [followLoading, setFollowLoading] = useState(false);
   const [isBlocked, setIsBlocked] = useState(false);
   const [blocking, setBlocking] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
@@ -98,17 +101,21 @@ export default function ProfilePage() {
 
   /* ── Optimistic follow state ────────────────────────────────────────── */
 
-  const followState = useOptimisticFollow(currentUserAddress, address, {
-    isFollowing: state.status === "success" ? state.data.isFollowing : false,
-    followersCount: state.status === "success" ? state.data.followersCount : 0,
-    followingCount: state.status === "success" ? state.data.followingCount : 0,
+  // Optimistic follow: the button and follower count flip on click, the
+  // Stellar transaction runs in the background, and a failure rolls both back
+  // with a descriptive toast.
+  const followMutation = useFollowMutation({
+    follower: currentUserAddress,
+    followee: address,
+    initialIsFollowing: state.status === "success" ? state.data.isFollowing : false,
+    initialFollowersCount: state.status === "success" ? state.data.followersCount : 0,
+    initialFollowingCount: state.status === "success" ? state.data.followingCount : 0,
+    onConfirmed: () => {
+      // Chain now agrees with the optimistic value; refresh indexer truth.
+      void refetch();
+    },
   });
-
-  //  const followState_2 = useOptimisticFollow(currentUserAddress, address, {
-  //   isFollowing: state.status === "success" ? state.data.isFollowing : false,
-  //   followersCount: state.status === "success" ? state.data.followersCount : 0,
-  //   followingCount: state.status === "success" ? state.data.followingCount : 0,
-  // });
+  const followState = followMutation.state;
 
   /* ── Live event subscriptions ───────────────────────────────────────── */
 
@@ -140,81 +147,6 @@ export default function ProfilePage() {
       });
     }
   }, [state.status, address, currentUserAddress]);
-
-  /* ── Follow / unfollow ──────────────────────────────────────────────── */
-
-  const handleFollowToggle = useCallback(async () => {
-    if (!currentUserAddress || followLoading) return;
-
-    const key = `${currentUserAddress}:${address}`;
-    const newIsFollowing = !followState.isFollowing;
-
-    // Optimistic UI update
-    OptimisticStore.setFollowState(key, {
-      isFollowing: newIsFollowing,
-      followersCount: followState.followersCount + (newIsFollowing ? 1 : -1),
-      followingCount: followState.followingCount,
-    });
-
-    setFollowLoading(true);
-
-    try {
-      const server = new StellarRpc.Server(RPC_URL);
-      const account = await server.getAccount(currentUserAddress);
-
-      const contract = new Contract(CONTRACT_ID);
-      const op = contract.call(
-        newIsFollowing ? "follow" : "unfollow",
-        Address.fromString(currentUserAddress).toScVal(),
-        Address.fromString(address).toScVal()
-      );
-
-      const tx = new TransactionBuilder(account, {
-        fee: BASE_FEE,
-        networkPassphrase: NETWORK_PASSPHRASE,
-      })
-        .addOperation(op)
-        .setTimeout(30)
-        .build();
-
-      const simulated = await server.simulateTransaction(tx);
-      if (StellarRpc.Api.isSimulationError(simulated)) {
-        throw new Error(`Simulation failed: ${simulated.error}`);
-      }
-
-      const finalTx = StellarRpc.assembleTransaction(tx, simulated).build();
-      const xdrString = finalTx.toXDR();
-
-      const signedXdr = await signTransaction(xdrString, {
-        networkPassphrase: NETWORK_PASSPHRASE,
-      });
-
-      const signedTx = TransactionBuilder.fromXDR(signedXdr, NETWORK_PASSPHRASE);
-      const sendResponse = await server.sendTransaction(signedTx);
-
-      if (sendResponse.status === "ERROR") {
-        throw new Error("Transaction failed to submit");
-      }
-
-      let status: string = sendResponse.status;
-      const startTime = Date.now();
-      while (status === "PENDING" && Date.now() - startTime < 30000) {
-        await new Promise((r) => setTimeout(r, 1000));
-        const txResponse = await server.getTransaction(sendResponse.hash);
-        status = txResponse.status as string;
-      }
-    } catch (error) {
-      console.error("Follow/unfollow failed:", error);
-      // Rollback optimistic update
-      OptimisticStore.setFollowState(key, {
-        isFollowing: !newIsFollowing,
-        followersCount: followState.followersCount,
-        followingCount: followState.followingCount,
-      });
-    } finally {
-      setFollowLoading(false);
-    }
-  }, [currentUserAddress, address, followState, followLoading]);
 
   /* ── Check if blocked ──────────────────────────────────────────────── */
 
@@ -452,9 +384,11 @@ export default function ProfilePage() {
             {!isSelf && currentUserAddress && (
               <>
                 <button
-                  onClick={handleFollowToggle}
+                  onClick={() => followMutation.toggle()}
+                  disabled={followMutation.isPending}
+                  aria-busy={followMutation.isPending}
                   id="follow-btn"
-                  className={`w-full sm:w-auto px-6 py-2 rounded-full font-bold transition-all ${
+                  className={`w-full sm:w-auto px-6 py-2 rounded-full font-bold transition-all disabled:cursor-wait ${
                     followState.isFollowing
                       ? "bg-transparent border border-[var(--text-muted)] text-[var(--text-primary)] hover:bg-[var(--error)] hover:border-[var(--error)] hover:text-white"
                       : "bg-[var(--accent-coral)] text-white hover:opacity-90"
@@ -466,6 +400,9 @@ export default function ProfilePage() {
                   }
                 >
                   {followState.isFollowing ? "Following" : "Follow"}
+                  {followMutation.isPending && (
+                    <span className="ml-2 text-xs font-normal opacity-80">…</span>
+                  )}
                 </button>
 
                 {/* Overflow menu trigger */}

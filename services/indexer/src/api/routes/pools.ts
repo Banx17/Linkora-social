@@ -2,8 +2,9 @@ import { Router, Request, Response } from "express";
 import { Database } from "../../db";
 import { validateParams, validateQuery } from "../../middleware/validate";
 import { z } from "zod";
-import { offsetPaginationSchema } from "@linkora/types/src/schemas";
+import { offsetPaginationSchema, cursorPaginationSchema } from "@linkora/types/src/schemas";
 import { notFoundError, internalError } from "@linkora/types/src/errors";
+import { CacheService, CacheKeys, POOL_LIST_TTL_S } from "../../cache";
 
 const poolIdParamsSchema = z.object({
   id: z
@@ -16,20 +17,57 @@ const searchPoolsQuerySchema = offsetPaginationSchema.extend({
   q: z.string().trim().min(1, "q is required and must be a non-empty string"),
 });
 
-export function createPoolsRouter(db: Database): Router {
+export function createPoolsRouter(db: Database, cache?: CacheService): Router {
   const router = Router();
 
-  router.get("/", async (_req: Request, res: Response): Promise<void> => {
-    try {
-      const pools = await db.listPools();
-      res.json({
-        pools: pools.map((p) => ({ ...p, balance: p.balance.toString() })),
-      });
-    } catch {
-      const err = internalError("Failed to fetch pools");
-      res.status(err.statusCode).json(err.toJSON(_req.context?.requestId));
+  router.get(
+    "/",
+    validateQuery(cursorPaginationSchema),
+    async (req: Request, res: Response): Promise<void> => {
+      const { limit, cursor } = req.query as unknown as z.infer<typeof cursorPaginationSchema>;
+
+      try {
+        const cacheKey = CacheKeys.poolList(cursor ?? "", limit);
+        if (cache) {
+          const cached = await cache.get<{ pools: unknown[]; nextCursor: string | null }>(
+            cacheKey
+          );
+          if (cached) {
+            res.json({
+              pools: cached.pools,
+              limit,
+              cursor: cursor ?? null,
+              next_cursor: cached.nextCursor,
+              has_more: cached.nextCursor !== null,
+            });
+            return;
+          }
+        }
+
+        const { pools, nextCursor } = await db.listPoolsCursor({
+          limit,
+          cursor: cursor || undefined,
+        });
+
+        const serialisedPools = pools.map((p) => ({ ...p, balance: p.balance.toString() }));
+
+        if (cache) {
+          await cache.set(cacheKey, { pools: serialisedPools, nextCursor }, POOL_LIST_TTL_S);
+        }
+
+        res.json({
+          pools: serialisedPools,
+          limit,
+          cursor: cursor ?? null,
+          next_cursor: nextCursor,
+          has_more: nextCursor !== null,
+        });
+      } catch {
+        const err = internalError("Failed to fetch pools");
+        res.status(err.statusCode).json(err.toJSON(req.context?.requestId));
+      }
     }
-  });
+  );
 
   router.get(
     "/search",

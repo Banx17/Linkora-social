@@ -50,6 +50,8 @@ tags:
     description: Tip pool details and analytics.
   - name: Governance
     description: Indexed governance proposals.
+  - name: Events
+    description: Raw on-chain contract events with cursor pagination.
   - name: Users
     description: User block lists and published direct-message keys.
   - name: Notifications
@@ -242,6 +244,27 @@ paths:
                     type: integer
                   has_more:
                     type: boolean
+        "400":
+          $ref: "#/components/responses/ValidationError"
+
+  /api/profiles:
+    get:
+      summary: List profiles
+      operationId: listProfiles
+      tags: [Profiles]
+      security:
+        - StellarSig: []
+        - {}
+      parameters:
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/cursor"
+      responses:
+        "200":
+          description: Cursor-paginated list of profiles
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProfileList"
         "400":
           $ref: "#/components/responses/ValidationError"
 
@@ -441,6 +464,10 @@ paths:
           schema:
             type: integer
             default: 0
+          description: >-
+            Offset-based fallback for the home feed (legacy). The explore and
+            following feeds use cursor pagination; the home feed will migrate
+            in a follow-up once the social graph query is refactored.
       responses:
         "200":
           description: Paginated feed.
@@ -535,10 +562,15 @@ paths:
       parameters:
         - name: q
           in: query
-          required: true
+          required: false
           schema:
             type: string
           description: Full-text search query.
+        - name: tag
+          in: query
+          required: false
+          schema:
+            type: string
         - $ref: "#/components/parameters/limit"
         - $ref: "#/components/parameters/cursor"
       responses:
@@ -546,6 +578,172 @@ paths:
           description: Matching posts.
           content:
             application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          $ref: "#/components/responses/ValidationError"
+
+  /api/search:
+    get:
+      summary: Search across posts, profiles, and pools
+      operationId: search
+      tags: [Search]
+      security:
+        - StellarSig: []
+        - {}
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Full-text search query.
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [posts, profiles, pools]
+          description: Filter by result type.
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/cursor"
+      responses:
+        "200":
+          description: Matching results.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          $ref: "#/components/responses/ValidationError"
+
+
+  # ── Webhooks ────────────────────────────────────────────────────────────────
+  /api/webhooks:
+    post:
+      summary: Register a webhook endpoint
+      operationId: registerWebhook
+      tags: [Webhooks]
+      security:
+        - StellarSig: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, secret, event_types]
+              properties:
+                url:
+                  type: string
+                  format: uri
+                secret:
+                  type: string
+                event_types:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "201":
+          description: Webhook registered
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          $ref: "#/components/responses/ValidationError"
+
+  /api/webhooks/{id}:
+    delete:
+      summary: Deactivate a webhook
+      operationId: deleteWebhook
+      tags: [Webhooks]
+      security:
+        - StellarSig: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Webhook deactivated
+        "400":
+          $ref: "#/components/responses/ValidationError"
+
+  /api/webhooks/{id}/deliveries:
+    get:
+      summary: List webhook delivery attempts
+      operationId: getWebhookDeliveries
+      tags: [Webhooks]
+      security:
+        - StellarSig: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Delivery history
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  # ── Events ──────────────────────────────────────────────────────────────────
+  /api/events/replay:
+    get:
+      summary: Replay historical events
+      operationId: replayEvents
+      tags: [Events]
+      security:
+        - StellarSig: []
+        - {}
+      parameters:
+        - name: fromLedger
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: toLedger
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: types
+          in: query
+          required: false
+          schema:
+            type: array
+            items:
+              type: string
+          style: form
+          explode: true
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+      responses:
+        "200":
+          description: NDJSON stream of events
+          content:
+            application/x-ndjson:
               schema:
                 type: object
                 additionalProperties: true
@@ -606,18 +804,33 @@ paths:
       security:
         - StellarSig: []
         - {}
+      parameters:
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/cursor"
       responses:
         "200":
-          description: All tip pools.
+          description: Cursor-paginated list of tip pools.
           content:
             application/json:
               schema:
                 type: object
+                required: [pools, limit, cursor, next_cursor, has_more]
                 properties:
                   pools:
                     type: array
                     items:
                       $ref: "#/components/schemas/Pool"
+                  limit:
+                    type: integer
+                  cursor:
+                    type: [string, "null"]
+                  next_cursor:
+                    type: [string, "null"]
+                    description: Pass as `cursor` to fetch the next page. `null` when no more pages.
+                  has_more:
+                    type: boolean
+        "400":
+          $ref: "#/components/responses/ValidationError"
 
   /api/pools/search:
     get:
@@ -724,21 +937,72 @@ paths:
       parameters:
         - $ref: "#/components/parameters/limit"
         - $ref: "#/components/parameters/cursor"
-        - name: offset
-          in: query
-          required: false
-          schema:
-            type: integer
       responses:
         "200":
-          description: Paginated proposals.
+          description: Cursor-paginated proposals.
           content:
             application/json:
               schema:
                 type: object
-                additionalProperties: true
+                required: [proposals, limit, cursor, next_cursor, has_more]
+                properties:
+                  proposals:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                  limit:
+                    type: integer
+                  cursor:
+                    type: [string, "null"]
+                  next_cursor:
+                    type: [string, "null"]
+                    description: Pass as `cursor` to fetch the next page. `null` when no more pages.
+                  has_more:
+                    type: boolean
         "400":
           $ref: "#/components/responses/ValidationError"
+
+  # ── Events ──────────────────────────────────────────────────────────────────
+  /api/events:
+    get:
+      summary: List on-chain events
+      operationId: listEvents
+      tags: [Events]
+      security:
+        - StellarSig: []
+        - {}
+      description: >-
+        Returns a cursor-paginated list of raw on-chain events from `raw_events`,
+        sorted newest-first by `(ledger_sequence DESC, event_index DESC)`.
+        The composite keyset cursor guarantees no skipped or duplicated rows
+        when new events are ingested between page requests.
+      parameters:
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/cursor"
+        - name: contract_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter events to a single contract address.
+        - name: topic
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter by first topic value (exact match against `topic[1]`).
+      responses:
+        "200":
+          description: Cursor-paginated list of on-chain events.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventList"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   # ── Users ───────────────────────────────────────────────────────────────────
   /api/users/{address}/blocked:
@@ -1219,6 +1483,25 @@ components:
           type: integer
           description: Follower count included by profile search results.
 
+    ProfileList:
+      type: object
+      required: [profiles, limit, cursor, next_cursor, has_more]
+      properties:
+        profiles:
+          type: array
+          items:
+            $ref: "#/components/schemas/Profile"
+        limit:
+          type: integer
+        cursor:
+          type: [string, "null"]
+          description: The cursor token that was used to fetch this page.
+        next_cursor:
+          type: [string, "null"]
+          description: Pass as `cursor` to fetch the next page. `null` when no more pages exist.
+        has_more:
+          type: boolean
+
     Post:
       type: object
       required: [id, author, deleted, tip_total, like_count, created_ledger]
@@ -1243,24 +1526,26 @@ components:
 
     PostList:
       type: object
-      required: [posts, total, limit, cursor, has_more]
+      required: [posts, limit, cursor, next_cursor, has_more]
       properties:
         posts:
           type: array
           items:
             $ref: "#/components/schemas/Post"
-        total:
-          type: integer
         limit:
           type: integer
         cursor:
           type: [string, "null"]
+          description: The cursor token that was used to fetch this page.
+        next_cursor:
+          type: [string, "null"]
+          description: Pass as `cursor` to fetch the next page. `null` when no more pages exist.
         has_more:
           type: boolean
 
     FollowerList:
       type: object
-      required: [address, followers, total, limit, cursor, next_cursor]
+      required: [address, followers, total, limit, cursor, next_cursor, has_more]
       properties:
         address:
           type: string
@@ -1276,10 +1561,13 @@ components:
           type: [string, "null"]
         next_cursor:
           type: [string, "null"]
+          description: Pass as `cursor` to fetch the next page. `null` when no more pages.
+        has_more:
+          type: boolean
 
     FollowingList:
       type: object
-      required: [address, following, total, limit, cursor, next_cursor]
+      required: [address, following, total, limit, cursor, next_cursor, has_more]
       properties:
         address:
           type: string
@@ -1295,6 +1583,9 @@ components:
           type: [string, "null"]
         next_cursor:
           type: [string, "null"]
+          description: Pass as `cursor` to fetch the next page. `null` when no more pages.
+        has_more:
+          type: boolean
 
     Pool:
       type: object
@@ -1318,6 +1609,55 @@ components:
           type: integer
         updated_ledger:
           type: integer
+
+    ChainEvent:
+      type: object
+      required: [id, ledger_sequence, event_index, contract_id, topic, data]
+      properties:
+        id:
+          type: string
+          description: Surrogate row ID serialised as a string (supports large integers).
+        ledger_sequence:
+          type: integer
+          description: Stellar ledger sequence in which this event was emitted.
+        event_index:
+          type: integer
+          description: Position of this event within the ledger batch.
+        contract_id:
+          type: string
+          description: Soroban contract that emitted the event.
+        topic:
+          type: array
+          items:
+            type: string
+          description: Decoded topic values from the contract event.
+        data:
+          type: object
+          additionalProperties: true
+          description: Decoded JSONB event payload.
+        processed_at:
+          type: [string, "null"]
+          format: date-time
+          description: Timestamp when the event was projected into domain tables. `null` if not yet processed.
+
+    EventList:
+      type: object
+      required: [events, limit, cursor, next_cursor, has_more]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChainEvent"
+        limit:
+          type: integer
+        cursor:
+          type: [string, "null"]
+          description: The cursor token that was used to fetch this page.
+        next_cursor:
+          type: [string, "null"]
+          description: Pass as `cursor` to fetch the next page. `null` when no more pages exist.
+        has_more:
+          type: boolean
 
     ErrorBody:
       type: object

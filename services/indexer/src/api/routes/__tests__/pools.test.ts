@@ -2,6 +2,7 @@ import express from "express";
 import request from "supertest";
 import { createPoolsRouter } from "../pools";
 import { Database, Pool, PoolAnalytics } from "../../../db";
+import { encodeCursor } from "../cursor";
 
 function makePool(overrides: Partial<Pool> = {}): Pool {
   return {
@@ -43,6 +44,7 @@ function makeDb(overrides: Partial<Database> = {}): Database {
   return {
     getPool: jest.fn().mockResolvedValue(null),
     listPools: jest.fn().mockResolvedValue([]),
+    listPoolsCursor: jest.fn().mockResolvedValue({ pools: [], nextCursor: null }),
     searchPools: jest.fn().mockResolvedValue({ pools: [], total: 0 }),
     getPoolAnalytics: jest.fn().mockResolvedValue(makeAnalytics()),
     ...overrides,
@@ -50,14 +52,60 @@ function makeDb(overrides: Partial<Database> = {}): Database {
 }
 
 describe("GET /pools", () => {
-  it("returns all pools", async () => {
+  it("returns all pools with cursor pagination fields", async () => {
     const pools = [makePool({ pool_id: "community" }), makePool({ pool_id: "grants" })];
-    const db = makeDb({ listPools: jest.fn().mockResolvedValue(pools) });
+    const db = makeDb({ listPoolsCursor: jest.fn().mockResolvedValue({ pools, nextCursor: null }) });
     const app = buildApp(db);
 
     const res = await request(app).get("/pools");
     expect(res.status).toBe(200);
     expect(body(res).pools).toHaveLength(2);
+    expect(body(res)).toHaveProperty("next_cursor", null);
+    expect(body(res)).toHaveProperty("has_more", false);
+    expect(body(res)).toHaveProperty("cursor", null);
+  });
+
+  it("forwards limit and cursor query params to the DB", async () => {
+    const cursor = encodeCursor("1000", "community");
+    const listPoolsCursor = jest.fn().mockResolvedValue({ pools: [], nextCursor: null });
+    const db = makeDb({ listPoolsCursor });
+    const app = buildApp(db);
+
+    const res = await request(app).get(`/pools?limit=5&cursor=${encodeURIComponent(cursor)}`);
+    expect(res.status).toBe(200);
+    expect(listPoolsCursor).toHaveBeenCalledWith({ limit: 5, cursor });
+  });
+
+  it("returns next_cursor when more pages exist", async () => {
+    const nextCursor = encodeCursor("999", "grants");
+    const db = makeDb({
+      listPoolsCursor: jest.fn().mockResolvedValue({
+        pools: [makePool()],
+        nextCursor,
+      }),
+    });
+    const app = buildApp(db);
+
+    const res = await request(app).get("/pools?limit=1");
+    expect(res.status).toBe(200);
+    expect(body(res).next_cursor).toBe(nextCursor);
+    expect(body(res).has_more).toBe(true);
+  });
+
+  it("rejects limit > 100 with 400", async () => {
+    const db = makeDb();
+    const app = buildApp(db);
+
+    const res = await request(app).get("/pools?limit=200");
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a non-base64 cursor with 400", async () => {
+    const db = makeDb();
+    const app = buildApp(db);
+
+    const res = await request(app).get("/pools?cursor=not+valid!!!");
+    expect(res.status).toBe(400);
   });
   describe("GET /pools/search", () => {
     it("returns 400 when q is missing", async () => {

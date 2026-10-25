@@ -161,7 +161,42 @@ describe("LinkoraClient write methods", () => {
       expect.anything(),
       val("pool1"),
       val(500n),
-      addr("GRECIPIENT")
+      addr("GRECIPIENT"),
+      val(null),
+      val(null)
+    );
+  });
+
+  it("poolWithdraw with slippage protection", () => {
+    expect(
+      client.poolWithdraw(["GA", "GB"], "pool1", 500, "GRECIPIENT", {
+        minOut: 495,
+        deadline: 1700000000,
+      })
+    ).toBe(XDR);
+    expect(mockCall).toHaveBeenCalledWith(
+      "pool_withdraw",
+      expect.anything(),
+      val("pool1"),
+      val(500n),
+      addr("GRECIPIENT"),
+      val(495n),
+      val(1700000000n)
+    );
+  });
+
+  it("withdrawFromPool is an alias of poolWithdraw", () => {
+    expect(client.withdrawFromPool(["GA", "GB"], "pool1", 500, "GRECIPIENT", { minOut: 495 })).toBe(
+      XDR
+    );
+    expect(mockCall).toHaveBeenCalledWith(
+      "pool_withdraw",
+      expect.anything(),
+      val("pool1"),
+      val(500n),
+      addr("GRECIPIENT"),
+      val(495n),
+      val(null)
     );
   });
 
@@ -346,7 +381,79 @@ describe("prepare*Tx methods (Submittable)", () => {
       expect.objectContaining({ _opts: { type: "vec" } }),
       val("pool-1"),
       val(500n),
-      addr("GDX")
+      addr("GDX"),
+      val(null),
+      val(null)
+    );
+  });
+
+  it("preparePoolWithdrawTx passes slippage protection", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    jest.spyOn(client as any, "getAccountForTx").mockResolvedValue(new Account("GA", "100"));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    jest.spyOn(client, "prepareTransaction").mockResolvedValue({
+      toEnvelope: () => ({ toXDR: () => "PREPARED_XDR" }),
+    } as unknown as Awaited<ReturnType<typeof client.prepareTransaction>>);
+
+    const result = await client.preparePoolWithdrawTx(["GA", "GB"], "pool-1", 500n, "GDX", {
+      minOut: 495n,
+      deadline: 1700000000n,
+    });
+    expect(result).toBe("PREPARED_XDR");
+    expect(client.prepareTransaction).toHaveBeenCalledWith(
+      "pool_withdraw",
+      expect.objectContaining({ _accountId: "GA" }),
+      expect.objectContaining({ _opts: { type: "vec" } }),
+      val("pool-1"),
+      val(500n),
+      addr("GDX"),
+      val(495n),
+      val(1700000000n)
+    );
+  });
+
+  it("prepareCommitPostTx fetches sequence and uses prepareTransaction", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    jest.spyOn(client as any, "getAccountForTx").mockResolvedValue(new Account("GAUTHOR", "100"));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    jest.spyOn(client, "prepareTransaction").mockResolvedValue({
+      toEnvelope: () => ({ toXDR: () => "PREPARED_XDR" }),
+    } as unknown as Awaited<ReturnType<typeof client.prepareTransaction>>);
+
+    const hash = new Uint8Array(32).fill(7);
+    const result = await client.prepareCommitPostTx("GAUTHOR", hash, 1700000000n);
+    expect(result).toBe("PREPARED_XDR");
+    expect(client.prepareTransaction).toHaveBeenCalledWith(
+      "commit_post",
+      expect.objectContaining({ _accountId: "GAUTHOR" }),
+      addr("GAUTHOR"),
+      expect.objectContaining({ _val: expect.anything() }),
+      val(1700000000n)
+    );
+  });
+
+  it("prepareCommitPostTx rejects a hash that is not 32 bytes", async () => {
+    await expect(client.prepareCommitPostTx("GAUTHOR", new Uint8Array(16), 1n)).rejects.toThrow(
+      /32 bytes/
+    );
+  });
+
+  it("prepareRevealPostTx fetches sequence and uses prepareTransaction", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    jest.spyOn(client as any, "getAccountForTx").mockResolvedValue(new Account("GAUTHOR", "100"));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    jest.spyOn(client, "prepareTransaction").mockResolvedValue({
+      toEnvelope: () => ({ toXDR: () => "PREPARED_XDR" }),
+    } as unknown as Awaited<ReturnType<typeof client.prepareTransaction>>);
+
+    const result = await client.prepareRevealPostTx("GAUTHOR", 7n, "the real content");
+    expect(result).toBe("PREPARED_XDR");
+    expect(client.prepareTransaction).toHaveBeenCalledWith(
+      "reveal_post",
+      expect.objectContaining({ _accountId: "GAUTHOR" }),
+      addr("GAUTHOR"),
+      val(7n),
+      val("the real content")
     );
   });
 

@@ -3,10 +3,15 @@ import { DepositTab } from "../DepositTab";
 import { WithdrawTab } from "../WithdrawTab";
 import { thresholdImplication } from "../PoolTxConfirmDialog";
 import { useDeposit, useWithdraw } from "@/hooks/usePoolContract";
+import { usePoolDepositMutation } from "@/hooks/usePoolDepositMutation";
 
 jest.mock("@/hooks/usePoolContract", () => ({
   useDeposit: jest.fn(),
   useWithdraw: jest.fn(),
+}));
+
+jest.mock("@/hooks/usePoolDepositMutation", () => ({
+  usePoolDepositMutation: jest.fn(),
 }));
 
 const ADMIN = "GADMIN1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -30,6 +35,15 @@ beforeEach(() => {
     status: "idle",
     result: null,
     error: null,
+    deposit,
+    reset: jest.fn(),
+  });
+  (usePoolDepositMutation as jest.Mock).mockReturnValue({
+    status: "idle",
+    result: null,
+    error: null,
+    isPending: false,
+    pendingDeposit: null,
     deposit,
     reset: jest.fn(),
   });
@@ -96,7 +110,14 @@ describe("Pool deposit confirmation (#1634)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Deposit & sign" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(deposit).toHaveBeenCalledWith(ADMIN, "community-fund", TOKEN, "12.5", 7, "CLINKORA");
+    expect(deposit).toHaveBeenCalledWith({
+      depositor: ADMIN,
+      poolId: "community-fund",
+      token: TOKEN,
+      amountRaw: "12.5",
+      decimals: 7,
+      contractAddress: "CLINKORA",
+    });
   });
 
   it("does not open the summary for an invalid amount", () => {

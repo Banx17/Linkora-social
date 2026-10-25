@@ -52,8 +52,11 @@ function extractContractEntrypoints(source: string): Set<string> {
 /** Extract contract event structs declared with #[contractevent]. */
 function extractContractEvents(source: string): Set<string> {
   const events = new Set<string>();
+  // `#[contractevent]` may carry attributes (e.g. `topics = ["..."]`), so the
+  // attribute body is matched optionally, allowing one level of nested
+  // brackets inside the parentheses.
   const re =
-    /#\[contractevent\]\s*#\[derive[^\n]*\]\s*pub struct ([A-Za-z_]\w*)\s*\{/g;
+    /#\[contractevent(?:\((?:[^[\]()]|\[[^\]]*\])*\))?\]\s*#\[derive[^\n]*\]\s*pub struct ([A-Za-z_]\w*)\s*\{/g;
   let match: RegExpExecArray | null;
   while ((match = re.exec(source))) {
     events.add(match[1]);

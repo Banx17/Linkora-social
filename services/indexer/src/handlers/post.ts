@@ -4,6 +4,7 @@
  */
 
 import { Pool } from "pg";
+import { logger } from "../logger";
 
 export interface PostCreatedEvent {
   id: bigint;
@@ -57,12 +58,12 @@ export async function handlePostCreated(
     const result = await pool.query(query, values);
 
     if (result.rowCount === 0) {
-      console.log(`Post ${id} already exists (idempotent skip)`);
+      logger.debug({ postId: id.toString() }, "Post already exists (idempotent skip)");
     } else {
-      console.log(`Post ${id} created by ${author}`);
+      logger.info({ postId: id.toString(), author }, "Post created");
     }
   } catch (error) {
-    console.error(`Error handling PostCreatedEvent for post ${id}:`, error);
+    logger.error({ postId: id.toString(), author, err: error }, "Error handling PostCreatedEvent");
     throw error;
   }
 }
@@ -92,12 +93,12 @@ export async function handlePostDeleted(
     const result = await pool.query(query, values);
 
     if (result.rowCount === 0) {
-      console.log(`Post ${post_id} already deleted or not found (idempotent skip)`);
+      logger.debug({ postId: post_id.toString(), author }, "Post already deleted or not found (idempotent skip)");
     } else {
-      console.log(`Post ${post_id} deleted by ${author}`);
+      logger.info({ postId: post_id.toString(), author }, "Post deleted");
     }
   } catch (error) {
-    console.error(`Error handling PostDeletedEvent for post ${post_id}:`, error);
+    logger.error({ postId: post_id.toString(), author, err: error }, "Error handling PostDeletedEvent");
     throw error;
   }
 }

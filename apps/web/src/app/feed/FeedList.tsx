@@ -92,6 +92,24 @@ export function FeedList({ tab, address, initial }: FeedListProps) {
       getItemId: getPostId,
     });
 
+  // Posts removed optimistically (awaiting the delete request). They stay
+  // hidden on success and are removed from this set on failure, which makes
+  // them reappear in place.
+  const [deletedIds, setDeletedIds] = useState<Array<string | number>>([]);
+
+  const handleOptimisticDelete = useCallback((postId: string | number) => {
+    setDeletedIds((previous) => [...previous, postId]);
+  }, []);
+
+  const handleDeleteFailed = useCallback((postId: string | number) => {
+    setDeletedIds((previous) => previous.filter((id) => String(id) !== String(postId)));
+  }, []);
+
+  const visibleItems = useMemo(
+    () => items.filter((post) => !deletedIds.some((id) => String(id) === String(post.id))),
+    [deletedIds, items]
+  );
+
   // Item count before the in-flight "next page" request; null when idle.
   const announceBaselineRef = useRef<number | null>(null);
   // Announced by a visually hidden aria-live region after a page is appended.
@@ -139,7 +157,7 @@ export function FeedList({ tab, address, initial }: FeedListProps) {
     );
   }
 
-  if (items.length === 0 && !isFetchingNextPage) {
+  if (visibleItems.length === 0 && !isFetchingNextPage) {
     return (
       <div className="py-16 text-center text-[var(--text-muted)]" data-testid="empty-feed">
         {EMPTY_MESSAGE[tab]}
@@ -164,6 +182,13 @@ export function FeedList({ tab, address, initial }: FeedListProps) {
       </div>
 
       <div className="space-y-4" data-testid="post-list">
+        {visibleItems.map((post) => (
+          <OptimisticPostCard
+            key={post.id}
+            post={post}
+            currentUser={address}
+            onOptimisticDelete={handleOptimisticDelete}
+            onDeleteFailed={handleDeleteFailed}
         {items.map((post, index) => (
           <PostCard
             key={post.id}

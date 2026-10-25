@@ -5,6 +5,7 @@
 
 import { Pool, PoolClient } from "pg";
 import { PgClientLike } from "../pipeline";
+import { logger } from "../logger";
 
 export interface LikePostEvent {
   user: string;
@@ -62,7 +63,7 @@ export async function handleLike(
       await conn.query("COMMIT");
     } catch (error) {
       await conn.query("ROLLBACK");
-      console.error(`Error handling LikePostEvent for post ${event.post_id}:`, error);
+      logger.error({ postId: event.post_id.toString(), err: error }, "Error handling LikePostEvent");
       throw error;
     } finally {
       (conn as PoolClient).release();
@@ -90,7 +91,7 @@ async function _likeWrites(
   );
 
   if ((insertResult.rowCount ?? 0) === 0) {
-    console.log(`Like already exists for user ${user} on post ${post_id} (idempotent skip)`);
+    logger.debug({ user, postId: post_id.toString() }, "Like already exists (idempotent skip)");
     return;
   }
 
@@ -100,7 +101,7 @@ async function _likeWrites(
      WHERE id = $1 AND deleted_at IS NULL`,
     [post_id.toString()]
   );
-  console.log(`Like from ${user} added to post ${post_id}`);
+  logger.info({ user, postId: post_id.toString() }, "Like added to post");
 }
 
 /**

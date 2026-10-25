@@ -21,6 +21,8 @@ import { createGovernanceRouter } from "./routes/governance";
 import { createUsersRouter } from "./routes/users";
 import { createFeedRouter } from "./routes/feed";
 import { createSearchRouter } from "./routes/search";
+import { createWebhooksRouter } from "./routes/webhooks";
+import { createEventsRouter } from "./routes/events";
 import { MediaUploadConfig } from "../config";
 import { isFenced } from "../gossip";
 import { getBackfillState } from "../stream";
@@ -33,6 +35,7 @@ import { PostgresDatabase } from "../postgres-db";
 import { HealthMonitor } from "../services/health-monitor";
 import { metricsText } from "../metrics";
 import { attachPoolMonitoring } from "../db-pool-monitor";
+import { CacheService, NoopCacheService } from "../cache";
 
 let warnedMissingAllowedOrigins = false;
 
@@ -88,7 +91,8 @@ export function createApp(
   pg?: PgPool,
   healthMonitor?: HealthMonitor,
   shutdownState?: { active: boolean },
-  mediaUpload?: MediaUploadConfig
+  mediaUpload?: MediaUploadConfig,
+  cache?: CacheService
 ): express.Application {
   const app = express();
   app.use(helmet());
@@ -247,14 +251,19 @@ export function createApp(
   // `src/api/__tests__/openapi.test.ts` walks this router stack and fails CI
   // when a mounted route is undocumented or a documented route is stale, so a
   // new endpoint cannot ship without a contract.
-  app.use("/api/profiles", createProfilesRouter(db));
+  app.use("/api/profiles", createProfilesRouter(db, cache));
   app.use("/api/posts", createPostsRouter(db, mediaUpload));
   app.use("/api/search", createSearchRouter(db));
+  app.use("/api/webhooks", createWebhooksRouter(db, pg || (db as any).pool));
+  if (pg) {
+    app.use("/api/events", createEventsRouter(pg));
+  }
   app.use("/api/follows", createFollowsRouter(db));
-  app.use("/api/pools", createPoolsRouter(db));
+  app.use("/api/pools", createPoolsRouter(db, cache));
   app.use("/api/governance", createGovernanceRouter(db));
   app.use("/api/users", createUsersRouter(db));
-  app.use("/api/feed", createFeedRouter(pg ?? db));
+  app.use("/api/feed", createFeedRouter(pg ?? db, cache));
+  app.use("/api/events", createEventsRouter(db));
 
   const notificationService = pg
     ? new NotificationService({ deviceTokenStore: new PostgresDeviceTokenStore(pg) })
@@ -350,12 +359,28 @@ if (require.main === module) {
       })
     : undefined;
   if (pg) attachPoolMonitoring(pg, { logger, serviceName: "indexer-api" });
+
+  // Initialise the response cache when REDIS_CACHE_URL is set; otherwise
+  // fall back to the no-op implementation so the API boots without Redis.
+  let appCache: CacheService;
+  if (config.redisCacheUrl) {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const IORedis = require("ioredis") as typeof import("ioredis").default;
+    const redisClient = new IORedis(config.redisCacheUrl, { lazyConnect: true });
+    redisClient.on("error", (err: Error) => logger.warn({ err }, "Redis cache client error"));
+    appCache = new CacheService(redisClient);
+    logger.info({ url: config.redisCacheUrl }, "Redis response cache enabled");
+  } else {
+    appCache = new NoopCacheService();
+    logger.info("Redis response cache disabled (REDIS_CACHE_URL not set)");
+  }
+
   const apiApp = pg
-    ? createApp(new PostgresDatabase(pg), pg, undefined, undefined, loadConfig().mediaUpload)
-    : createApp(_stub);
+    ? createApp(new PostgresDatabase(pg), pg, undefined, undefined, loadConfig().mediaUpload, appCache)
+    : createApp(_stub, undefined, undefined, undefined, undefined, appCache);
 
   apiApp.listen(PORT, () => {
-    console.log(`Indexer API listening on port ${PORT}`);
-    console.log(`Rate limit enabled: read limit is 60 RPM, write limit is 10 RPM`);
+    logger.info({ port: PORT }, "Indexer API listening");
+    logger.info("Rate limit enabled: read limit is 60 RPM, write limit is 10 RPM");
   });
 }

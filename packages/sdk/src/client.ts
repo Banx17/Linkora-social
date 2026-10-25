@@ -137,7 +137,7 @@ function scvString(value: string): xdr.ScVal {
 function scvU32(value: number): xdr.ScVal {
   return nativeToScVal(value, { type: "u32" });
 }
-function _scvU64(value: number | bigint): xdr.ScVal {
+function scvU64(value: number | bigint): xdr.ScVal {
   return nativeToScVal(value, { type: "u64" });
 }
 function scvSymbol(value: string): xdr.ScVal {
@@ -229,6 +229,18 @@ export interface SetProfileWithNewTokenParams {
   user: string;
   username: string;
   tokenParams: Omit<DeployCreatorTokenParams, "deployer">;
+}
+
+/**
+ * Slippage protection options for pool withdrawals.
+ *
+ * - `minOut`: minimum amount the recipient must receive. The withdrawal
+ *   reverts when the pool would deliver less than this.
+ * - `deadline`: Unix timestamp after which the withdrawal is no longer valid.
+ */
+export interface PoolWithdrawOptions {
+  minOut?: number | bigint;
+  deadline?: number | bigint;
 }
 
 /**
@@ -1407,6 +1419,54 @@ export class LinkoraClient extends GeneratedLinkoraClient {
   }
 
   /**
+   * Build a submittable commit_post transaction.
+   */
+  async prepareCommitPostTx(
+    author: string,
+    contentHash: Uint8Array,
+    revealTime: number | bigint,
+    horizonUrl?: string
+  ): Promise<string> {
+    ensureAddress(author, "author");
+    if (contentHash.length !== 32) {
+      throw new Error("contentHash must be 32 bytes");
+    }
+    ensurePositiveInteger(revealTime, "revealTime");
+    const sourceAccount = await this.getAccountForTx(author, horizonUrl);
+    const tx = await this.prepareTransaction(
+      "commit_post",
+      sourceAccount,
+      scvAddress(author),
+      nativeToScVal(new Uint8Array(contentHash), { type: "bytes" }),
+      scvU64(BigInt(revealTime))
+    );
+    return tx.toEnvelope().toXDR("base64");
+  }
+
+  /**
+   * Build a submittable reveal_post transaction.
+   */
+  async prepareRevealPostTx(
+    author: string,
+    postId: number | bigint,
+    content: string,
+    horizonUrl?: string
+  ): Promise<string> {
+    ensureAddress(author, "author");
+    ensurePositiveInteger(postId, "postId");
+    ensureNonEmptyString(content, "content");
+    const sourceAccount = await this.getAccountForTx(author, horizonUrl);
+    const tx = await this.prepareTransaction(
+      "reveal_post",
+      sourceAccount,
+      scvAddress(author),
+      scvU64(BigInt(postId)),
+      scvString(content)
+    );
+    return tx.toEnvelope().toXDR("base64");
+  }
+
+  /**
    * Create a new post.
    *
    * @param author The Stellar public key of the author.
@@ -1960,10 +2020,20 @@ export class LinkoraClient extends GeneratedLinkoraClient {
   /**
    * Withdraw tokens from a pool (requires multi-sig authorization).
    *
+   * Slippage protection (optional):
+   * - `minOut`: minimum amount the recipient must receive. The withdrawal
+   *   reverts when the pool would deliver less.
+   * - `deadline`: Unix timestamp after which the withdrawal is no longer
+   *   valid.
+   *
    * @param signers Array of Stellar public keys of the admins authorizing the withdrawal.
    * @param poolId The ID of the pool.
    * @param amount The amount to withdraw.
    * @param recipient The Stellar public key to receive the tokens.
+   * @param minOutOrOptions Slippage protection. Either an options object with
+   *   `minOut` and `deadline`, or the minimum received amount directly.
+   * @param deadlineArg Unix timestamp after which the withdrawal is no longer
+   *   valid. Only used when `minOutOrOptions` is not an options object.
    * @returns The base64-encoded XDR of the transaction operation.
    *
    * @example
@@ -1972,7 +2042,8 @@ export class LinkoraClient extends GeneratedLinkoraClient {
    *   ["GBFOY...", "GCO23..."],
    *   "my-pool-1",
    *   500n,
-   *   "GDX..."
+   *   "GDX...",
+   *   { minOut: 495n, deadline: 1234567890 }
    * );
    * console.log("Withdraw Op XDR:", txOp);
    * ```
@@ -1981,13 +2052,44 @@ export class LinkoraClient extends GeneratedLinkoraClient {
     signers: string[],
     poolId: string,
     amount: number | bigint,
-    recipient: string
+    recipient: string,
+    minOutOrOptions?: PoolWithdrawOptions | number | bigint | null,
+    deadlineArg?: number | bigint | null
   ): string {
+    const options =
+      typeof minOutOrOptions === "object" && minOutOrOptions !== null
+        ? minOutOrOptions
+        : { minOut: minOutOrOptions ?? undefined, deadline: deadlineArg ?? undefined };
     ensureAddressList(signers, "signers");
     ensureNonEmptyString(poolId, "poolId");
     ensurePositiveInteger(amount, "amount");
     ensureAddress(recipient, "recipient");
-    return super.poolWithdraw(signers, poolId, BigInt(amount), recipient);
+    return super.poolWithdraw(
+      signers,
+      poolId,
+      BigInt(amount),
+      recipient,
+      options.minOut == null ? null : BigInt(options.minOut),
+      options.deadline == null ? null : BigInt(options.deadline)
+    );
+  }
+
+  /**
+   * Withdraw tokens from a pool (deprecated alias of {@link poolWithdraw}).
+   *
+   * @deprecated Use poolWithdraw(signers, poolId, amount, recipient, { minOut, deadline }).
+   *   Pools are multisig treasuries: a withdrawal needs the admin signers and
+   *   the recipient, there are no shares to burn.
+   */
+  withdrawFromPool(
+    signers: string[],
+    poolId: string,
+    amount: number | bigint,
+    recipient: string,
+    minOutOrOptions?: PoolWithdrawOptions | number | bigint | null,
+    deadlineArg?: number | bigint | null
+  ): string {
+    return this.poolWithdraw(signers, poolId, amount, recipient, minOutOrOptions, deadlineArg);
   }
 
   /**
@@ -1998,6 +2100,8 @@ export class LinkoraClient extends GeneratedLinkoraClient {
    * @param poolId The ID of the pool.
    * @param amount The amount to withdraw.
    * @param recipient The Stellar public key to receive the tokens.
+   * @param options Optional slippage protection: minOut and deadline. A string
+   *   is accepted for backwards compatibility and treated as the horizon URL.
    * @param horizonUrl Optional Horizon URL to use. Defaults based on the network passphrase.
    * @returns The base64-encoded transaction envelope XDR ready for wallet signing.
    */
@@ -2006,20 +2110,25 @@ export class LinkoraClient extends GeneratedLinkoraClient {
     poolId: string,
     amount: number | bigint,
     recipient: string,
+    options?: PoolWithdrawOptions | string | null,
     horizonUrl?: string
   ): Promise<string> {
+    const opts = typeof options === "string" ? null : options;
+    const horizon = typeof options === "string" ? options : horizonUrl;
     ensureAddressList(signers, "signers");
     ensureNonEmptyString(poolId, "poolId");
     ensurePositiveInteger(amount, "amount");
     ensureAddress(recipient, "recipient");
-    const sourceAccount = await this.getAccountForTx(signers[0]!, horizonUrl);
+    const sourceAccount = await this.getAccountForTx(signers[0]!, horizon);
     const tx = await this.prepareTransaction(
       "pool_withdraw",
       sourceAccount,
       scvAddressVec(signers),
       scvSymbol(poolId),
       scvI128(amount),
-      scvAddress(recipient)
+      scvAddress(recipient),
+      opts?.minOut == null ? nativeToScVal(null) : scvI128(BigInt(opts.minOut)),
+      opts?.deadline == null ? nativeToScVal(null) : scvU64(BigInt(opts.deadline))
     );
     return tx.toEnvelope().toXDR("base64");
   }
