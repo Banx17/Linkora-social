@@ -563,7 +563,8 @@ export class PostgresDatabase implements Database {
     let nextCursor: string | null = null;
     if (hasMore && rows.length > 0) {
       const last = rows[rows.length - 1];
-      const ts = last.created_at instanceof Date ? last.created_at.toISOString() : String(last.created_at);
+      const ts =
+        last.created_at instanceof Date ? last.created_at.toISOString() : String(last.created_at);
       nextCursor = Buffer.from(`${ts}|${last.id}`, "utf-8").toString("base64");
     }
 
@@ -637,7 +638,9 @@ export class PostgresDatabase implements Database {
     let nextCursor: string | null = null;
     if (hasMore && rows.length > 0) {
       const last = rows[rows.length - 1];
-      nextCursor = Buffer.from(`${last.proposal_id}|${last.proposal_id}`, "utf-8").toString("base64");
+      nextCursor = Buffer.from(`${last.proposal_id}|${last.proposal_id}`, "utf-8").toString(
+        "base64"
+      );
     }
 
     return { proposals, nextCursor };
@@ -705,7 +708,9 @@ export class PostgresDatabase implements Database {
     let nextCursor: string | null = null;
     if (hasMore && rows.length > 0) {
       const last = rows[rows.length - 1];
-      nextCursor = Buffer.from(`${last.created_ledger}|${last.pool_id}`, "utf-8").toString("base64");
+      nextCursor = Buffer.from(`${last.created_ledger}|${last.pool_id}`, "utf-8").toString(
+        "base64"
+      );
     }
 
     return { pools, nextCursor };
@@ -770,7 +775,9 @@ export class PostgresDatabase implements Database {
     let nextCursor: string | null = null;
     if (hasMore && rows.length > 0) {
       const last = rows[rows.length - 1];
-      nextCursor = Buffer.from(`${last.updated_ledger}|${last.address}`, "utf-8").toString("base64");
+      nextCursor = Buffer.from(`${last.updated_ledger}|${last.address}`, "utf-8").toString(
+        "base64"
+      );
     }
 
     return { profiles, nextCursor };
@@ -1358,7 +1365,9 @@ export class PostgresDatabase implements Database {
         if (/^\d+$/.test(ledgerValue) && /^\d+$/.test(indexValue)) {
           params.push(ledgerValue, indexValue);
           // Composite keyset: strictly ordered even when ledger_sequence ties.
-          conditions.push(`(ledger_sequence, event_index) < ($${params.length - 1}::bigint, $${params.length}::int)`);
+          conditions.push(
+            `(ledger_sequence, event_index) < ($${params.length - 1}::bigint, $${params.length}::int)`
+          );
         }
       }
     }
@@ -1405,15 +1414,13 @@ export class PostgresDatabase implements Database {
     let nextCursor: string | null = null;
     if (hasMore && rows.length > 0) {
       const last = rows[rows.length - 1];
-      nextCursor = Buffer.from(
-        `${last.ledger_sequence}|${last.event_index}`,
-        "utf-8"
-      ).toString("base64");
+      nextCursor = Buffer.from(`${last.ledger_sequence}|${last.event_index}`, "utf-8").toString(
+        "base64"
+      );
     }
 
     return { events, nextCursor };
   }
-}
 
   async search(filters: {
     q: string;
@@ -1441,7 +1448,10 @@ export class PostgresDatabase implements Database {
       tsQuery = tsRes.rows[0]?.q?.toString() || null;
     } catch (e) {
       // fallback
-      const sanitised = q.trim().replace(/[^\w\s]/gu, " ").trim();
+      const sanitised = q
+        .trim()
+        .replace(/[^\w\s]/gu, " ")
+        .trim();
       if (!sanitised) return { total: 0 };
       tsQuery = sanitised
         .split(/\s+/)
@@ -1565,8 +1575,8 @@ export class PostgresDatabase implements Database {
         );
         const profiles: Profile[] = res.rows.map((row) => ({
           address: row.address,
-          username: row.username || row.handle || '',
-          creator_token: row.creator_token || '',
+          username: row.username || row.handle || "",
+          creator_token: row.creator_token || "",
           updated_ledger: Number(row.updated_ledger || 0),
         }));
         result.profiles = profiles;
@@ -1586,8 +1596,8 @@ export class PostgresDatabase implements Database {
           );
           const profiles: Profile[] = res.rows.map((row) => ({
             address: row.address,
-            username: row.username || '',
-            creator_token: row.creator_token || '',
+            username: row.username || "",
+            creator_token: row.creator_token || "",
             updated_ledger: Number(row.updated_ledger || 0),
           }));
           result.profiles = profiles;
@@ -1626,5 +1636,4 @@ export class PostgresDatabase implements Database {
 
     return result;
   }
-
 }

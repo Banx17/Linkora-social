@@ -88,8 +88,6 @@ export function createProfilesRouter(db: Database, cache?: CacheService): Router
       });
     }
   );
-    }
-  );
 
   router.get(
     "/:address",
